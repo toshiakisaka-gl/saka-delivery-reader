@@ -358,9 +358,51 @@
   <span>納品書読み取りツール　フェーズ1</span>
   <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
     <span id="keyStatus" style="font-size:11px;color:#aaa"></span>
+    <button onclick="showAliasManager()" style="padding:5px 14px;background:transparent;border:1px solid #555;border-radius:3px;color:#ccc;font-size:11px;cursor:pointer;font-family:inherit">型番エイリアス</button>
     <button onclick="showKeyModal()" style="padding:5px 14px;background:transparent;border:1px solid #555;border-radius:3px;color:#ccc;font-size:11px;cursor:pointer;font-family:inherit">APIキー設定</button>
   </div>
 </header>
+
+<!-- エクスポートメニューモーダル -->
+<div id="exportMenuOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:203">
+  <div style="background:var(--surface);border-radius:6px;padding:28px 32px;width:420px;max-width:90vw">
+    <h3 style="font-family:'EB Garamond',serif;font-size:17px;font-weight:400;margin:0 0 16px">エクスポート</h3>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
+      <button class="btn btn-secondary" style="text-align:left;padding:10px 14px" onclick="exportCurrentCSV()">
+        <strong>現在の読み取り結果</strong><span style="display:block;font-size:11px;color:var(--text-sub);margin-top:2px">確認画面の内容をCSVで出力</span>
+      </button>
+      <button class="btn btn-secondary" style="text-align:left;padding:10px 14px" onclick="exportAllHistory()">
+        <strong>全履歴データ（生データ）</strong><span style="display:block;font-size:11px;color:var(--text-sub);margin-top:2px">保存済みの全納品記録をCSVで出力</span>
+      </button>
+      <button class="btn btn-secondary" style="text-align:left;padding:10px 14px" onclick="exportMonthlyReport()">
+        <strong>月別集計レポート</strong><span style="display:block;font-size:11px;color:var(--text-sub);margin-top:2px">月ごとの集計データをCSVで出力</span>
+      </button>
+      <button class="btn btn-secondary" style="text-align:left;padding:10px 14px" onclick="exportProductReport()">
+        <strong>商品別集計レポート</strong><span style="display:block;font-size:11px;color:var(--text-sub);margin-top:2px">型番ごとの集計＋号数別グラムをCSVで出力</span>
+      </button>
+    </div>
+    <div style="display:flex;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="document.getElementById('exportMenuOverlay').style.display='none'">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- 型番エイリアス管理モーダル -->
+<div id="aliasMgrOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:202">
+  <div style="background:var(--surface);border-radius:6px;padding:28px 32px;width:560px;max-width:90vw;max-height:80vh;overflow-y:auto">
+    <h3 style="font-family:'EB Garamond',serif;font-size:17px;font-weight:400;margin:0 0 8px">型番エイリアス管理</h3>
+    <p style="color:var(--text-sub);font-size:12px;margin:0 0 16px">工場表記とSAKA型番の対応を管理します。</p>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input type="text" id="aliasMgrRaw" placeholder="工場表記（例：018-RLO-SV 新型）" style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:inherit;background:var(--bg);color:var(--text)">
+      <input type="text" id="aliasMgrSaka" placeholder="SAKA型番（例：018-R2LO）" style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:inherit;background:var(--bg);color:var(--text)">
+      <button class="btn btn-primary" style="padding:7px 14px;font-size:12px" onclick="addAlias()">追加</button>
+    </div>
+    <div id="aliasMgrList" style="border:1px solid var(--border);border-radius:3px;min-height:80px;max-height:300px;overflow-y:auto"></div>
+    <div style="display:flex;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-secondary" onclick="document.getElementById('aliasMgrOverlay').style.display='none'">閉じる</button>
+    </div>
+  </div>
+</div>
 
 <!-- APIキー設定モーダル -->
 <div id="keyModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:200">
@@ -463,7 +505,7 @@
 
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="clearResult()">クリア</button>
-        <button class="btn btn-export" id="btnExport" onclick="exportCSV()">CSV エクスポート</button>
+        <button class="btn btn-export" id="btnExport" onclick="showExportMenu()">▼ エクスポート</button>
         <button class="btn btn-primary" id="btnConfirm" onclick="confirmAndSave()">確定して保存</button>
       </div>
     </div>
@@ -483,6 +525,21 @@
     </div>
   </div>
 
+  <!-- 集計レポートセクション -->
+  <div class="section" id="reportSection" style="margin-top:24px;display:none">
+    <div class="section-header">
+      <h2>集計レポート</h2>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        <button id="btn_monthly" class="btn btn-primary" style="padding:4px 12px;font-size:11px" onclick="switchReport('monthly')">月別</button>
+        <button id="btn_product" class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="switchReport('product')">商品別</button>
+        <button id="btn_yearly" class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="switchReport('yearly')">年間サマリー</button>
+        <button id="btn_metal" class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="switchReport('metal')">地金単価推移</button>
+        <button id="btn_size" class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="switchReport('size')">号数別原価</button>
+      </div>
+    </div>
+    <div class="section-body" id="reportBody"></div>
+  </div>
+
 </div>
 
 <!-- Unknown Metal Modal -->
@@ -499,8 +556,65 @@
   </div>
 </div>
 
+<!-- 型番エイリアスモーダル -->
+<div id="aliasModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:201">
+  <div style="background:var(--surface);border-radius:6px;padding:28px 32px;width:460px;max-width:90vw">
+    <h3 style="font-family:'EB Garamond',serif;font-size:17px;font-weight:400;margin:0 0 10px">⚠ 未登録の型番</h3>
+    <p style="color:var(--text-sub);font-size:12px;line-height:1.7;margin:0 0 6px">工場表記：<strong id="aliasModalRaw" style="color:var(--text);background:var(--bg);padding:2px 8px;border-radius:2px"></strong></p>
+    <p style="color:var(--text-sub);font-size:12px;margin:0 0 12px">SAKAの型番（金種末尾なし）を入力してください。</p>
+    <input type="text" id="aliasModalInput" placeholder="例：018-R2LO" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:3px;font-size:13px;margin-bottom:8px;font-family:inherit;background:var(--bg);color:var(--text)">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-sub);margin-bottom:16px;cursor:pointer">
+      <input type="checkbox" id="aliasModalSave"> 次回から自動変換する（エイリアステーブルに追加）
+    </label>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="closeAliasModal(null)">スキップ（工場表記のまま）</button>
+      <button class="btn btn-primary" onclick="closeAliasModal(document.getElementById('aliasModalInput').value)">確定</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ==================== APIキー管理 ====================
+function showAliasManager() {
+  renderAliasList();
+  document.getElementById('aliasMgrOverlay').style.display = 'flex';
+}
+
+function renderAliasList() {
+  const list = document.getElementById('aliasMgrList');
+  const entries = Object.entries(aliasTable);
+  if (!entries.length) {
+    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-sub);font-size:12px">登録されたエイリアスはありません</div>';
+    return;
+  }
+  list.innerHTML = entries.map(([raw, saka]) =>
+    '<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border-light);font-size:12px">'
+    + '<span style="flex:1;color:var(--text-sub)">' + raw + '</span>'
+    + '<span style="color:var(--text-sub)">→</span>'
+    + '<span style="flex:1;font-weight:500">' + saka + '</span>'
+    + '<button onclick="deleteAlias(' + JSON.stringify(raw) + ')" style="padding:2px 8px;background:var(--danger-light);color:var(--danger);border:none;border-radius:2px;font-size:11px;cursor:pointer">削除</button>'
+    + '</div>'
+  ).join('');
+}
+
+function addAlias() {
+  const raw = document.getElementById('aliasMgrRaw').value.trim();
+  const saka = document.getElementById('aliasMgrSaka').value.trim();
+  if (!raw || !saka) { alert('工場表記とSAKA型番の両方を入力してください。'); return; }
+  aliasTable[raw] = saka;
+  localStorage.setItem('saka_alias_table', JSON.stringify(aliasTable));
+  document.getElementById('aliasMgrRaw').value = '';
+  document.getElementById('aliasMgrSaka').value = '';
+  renderAliasList();
+}
+
+function deleteAlias(raw) {
+  if (!confirm('「' + raw + '」のエイリアスを削除しますか？')) return;
+  delete aliasTable[raw];
+  localStorage.setItem('saka_alias_table', JSON.stringify(aliasTable));
+  renderAliasList();
+}
+
 function showKeyModal() {
   const existing = localStorage.getItem('saka_api_key') || '';
   document.getElementById('keyInput').value = existing;
@@ -530,6 +644,9 @@ function updateKeyStatus() {
     el.style.color = '#e8a87c';
   }
 }
+
+// ==================== 型番エイリアステーブル ====================
+let aliasTable = JSON.parse(localStorage.getItem('saka_alias_table') || '{}');
 
 // ==================== 金種変換テーブル ====================
 let metalTable = JSON.parse(localStorage.getItem('saka_metal_table') || 'null') || {
@@ -674,7 +791,8 @@ async function buildRows(data) {
     const sizes = rawSizes2.length > 0 ? rawSizes2 : Array(qty2).fill(null);
     const perSize = sizes.length;
     const metalSuffix = await resolveMetal(item.metal_type);
-    const sakaModel = (item.model || '') + metalSuffix;
+    const resolvedModel2 = await resolveAlias(item.model || '');
+    const sakaModel = resolvedModel2 + metalSuffix;
     const makingUnit = item.making_unit || 0;
     const looseTotal = (item.loose_stones || []).reduce((s, l) => s + (l.amount || 0), 0);
     const loosePerUnit = looseTotal / perSize;
@@ -827,7 +945,9 @@ async function renderResult(data) {
 
     // 金種変換
     let metalSuffix = await resolveMetal(item.metal_type);
-    const sakaModel = item.model ? item.model + metalSuffix : '';
+    // 型番エイリアス解決（工場表記→SAKA型番）
+    const resolvedModel = await resolveAlias(item.model || '');
+    const sakaModel = resolvedModel + metalSuffix;
 
     // 製作費
     const makingUnit = item.making_unit || 0;
@@ -948,6 +1068,38 @@ function updateTotals() {
 }
 
 // ==================== 金種解決（モーダル） ====================
+async function resolveAlias(rawModel) {
+  if (!rawModel) return rawModel;
+  // 完全一致チェック
+  if (aliasTable[rawModel]) return aliasTable[rawModel];
+  // 部分一致チェック（スペース含む型番など）
+  const normalized = rawModel.trim();
+  if (aliasTable[normalized]) return aliasTable[normalized];
+  // 未登録 → アラート
+  return new Promise((resolve) => {
+    aliasModalResolve = (sakaModel, save) => {
+      if (save && sakaModel) {
+        aliasTable[normalized] = sakaModel;
+        localStorage.setItem('saka_alias_table', JSON.stringify(aliasTable));
+      }
+      resolve(sakaModel || rawModel);
+    };
+    document.getElementById('aliasModalRaw').textContent = normalized;
+    document.getElementById('aliasModalInput').value = '';
+    document.getElementById('aliasModalOverlay').style.display = 'flex';
+  });
+}
+let aliasModalResolve = null;
+
+function closeAliasModal(val) {
+  document.getElementById('aliasModalOverlay').style.display = 'none';
+  if (aliasModalResolve) {
+    const save = document.getElementById('aliasModalSave').checked;
+    aliasModalResolve(val, save);
+    aliasModalResolve = null;
+  }
+}
+
 async function resolveMetal(metalType) {
   if (!metalType) return '';
   if (metalTable[metalType]) return metalTable[metalType];
@@ -1001,6 +1153,7 @@ function confirmAndSave() {
   renderHistory();
   // ボタンラベルをリセット
   document.getElementById('btnConfirm').textContent = '確定して保存';
+  document.getElementById('btnConfirm').onclick = confirmAndSave;
   // 伝票バッジを削除
   const badge = document.getElementById('slipBadges');
   if (badge) badge.remove();
@@ -1108,6 +1261,151 @@ function exportCSV() {
   a.click();
 }
 
+function showExportMenu() {
+  document.getElementById('exportMenuOverlay').style.display = 'flex';
+}
+
+function dlCSV(rows, filename) {
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  document.getElementById('exportMenuOverlay').style.display = 'none';
+}
+
+function exportCurrentCSV() {
+  if (!currentData || !currentData._rows) { alert('読み取り結果がありません。'); return; }
+  const date = document.getElementById('metaDate').value;
+  const slip = document.getElementById('metaSlipNo').value;
+  const subj = document.getElementById('metaSubject').value;
+  const hdr = ['納品日','伝票NO','件名','SAKA型番','号サイズ','金種','製作費','地金量(g)','地金単価(¥/g)','地金代','ルース','ルース代','原価合計'];
+  const lines = [hdr.join(',')];
+  currentData._rows.forEach(r => lines.push([date,slip,subj,r.sakaModel,r.size,r.metalType,r.makingUnit,r.metalGrams.toFixed(2),r.metalUnitPrice,r.metalAmount,'"'+r.looseDesc+'"',r.looseAmount,r.costTotal].join(',')));
+  dlCSV(lines, 'SAKA_納品_' + date.replace(/[年月日\s]/g,'') + '.csv');
+}
+
+function exportAllHistory() {
+  if (!history.length) { alert('履歴データがありません。'); return; }
+  const hdr = ['納品日','伝票NO','件名','SAKA型番','号サイズ','金種','製作費','地金量(g)','地金単価(¥/g)','地金代','ルース','ルース代','原価合計'];
+  const lines = [hdr.join(',')];
+  history.forEach(e => {
+    (e.rows||[]).forEach(r => lines.push([e.date,e.slip_no,e.subject,r.sakaModel,r.size,r.metalType,r.makingUnit,(r.metalGrams||0).toFixed(2),r.metalUnitPrice,r.metalAmount,'"'+(r.looseDesc||'')+'"',r.looseAmount,r.costTotal].join(',')));
+  });
+  dlCSV(lines, 'SAKA_全履歴_' + new Date().toISOString().slice(0,10) + '.csv');
+}
+
+function exportMonthlyReport() {
+  const months = {};
+  history.forEach(e => {
+    const m = (e.date||'').match(/(\d{4})年(\d{2})月/);
+    if (!m) return;
+    const key = m[1] + '年' + m[2] + '月';
+    if (!months[key]) months[key] = { qty:0, making:0, metal:0, loose:0, cost:0 };
+    (e.rows||[]).forEach(r => { months[key].qty++; months[key].making+=r.makingUnit||0; months[key].metal+=r.metalAmount||0; months[key].loose+=r.looseAmount||0; months[key].cost+=r.costTotal||0; });
+  });
+  const hdr = ['月','納品点数','製作費合計','地金代合計','ルース代合計','原価合計','平均原価/点'];
+  const lines = [hdr.join(',')];
+  Object.keys(months).sort().reverse().forEach(k => {
+    const mo = months[k];
+    lines.push([k, mo.qty, mo.making, mo.metal, mo.loose, mo.cost, mo.qty>0?Math.round(mo.cost/mo.qty):0].join(','));
+  });
+  dlCSV(lines, 'SAKA_月別集計_' + new Date().toISOString().slice(0,10) + '.csv');
+}
+
+function exportProductReport() {
+  const products = {};
+  history.forEach(e => {
+    (e.rows||[]).forEach(r => {
+      const pk = r.sakaModel||'不明';
+      if (!products[pk]) products[pk] = { qty:0, making:0, metal:0, loose:0, cost:0, sizes:{} };
+      products[pk].qty++; products[pk].making+=r.makingUnit||0; products[pk].metal+=r.metalAmount||0; products[pk].loose+=r.looseAmount||0; products[pk].cost+=r.costTotal||0;
+      if (r.size) {
+        if (!products[pk].sizes[r.size]) products[pk].sizes[r.size] = { grams:[], cost:[] };
+        products[pk].sizes[r.size].grams.push(r.metalGrams||0);
+        products[pk].sizes[r.size].cost.push(r.costTotal||0);
+      }
+    });
+  });
+  const hdr = ['SAKA型番','累計納品','平均製作費','平均地金代','平均ルース代','平均原価','号サイズ','平均地金量(g)','平均原価（サイズ別）','1号増加グラム','1号増加円'];
+  const lines = [hdr.join(',')];
+  Object.keys(products).sort().forEach(pk => {
+    const p = products[pk];
+    const avgMaking = Math.round(p.making/p.qty);
+    const avgMetal = Math.round(p.metal/p.qty);
+    const avgLoose = Math.round(p.loose/p.qty);
+    const avgCost = Math.round(p.cost/p.qty);
+    const sizes = Object.keys(p.sizes).sort((a,b)=>parseFloat(a.replace('#',''))-parseFloat(b.replace('#','')));
+    if (!sizes.length) {
+      lines.push([pk,p.qty,avgMaking,avgMetal,avgLoose,avgCost,'','','','',''].join(','));
+    } else {
+      let prevSz=null, prevG=null, prevC=null;
+      sizes.forEach((sz,i) => {
+        const d = p.sizes[sz];
+        const avgG = (d.grams.reduce((s,v)=>s+v,0)/d.grams.length).toFixed(2);
+        const avgC = Math.round(d.cost.reduce((s,v)=>s+v,0)/d.cost.length);
+        let perG='', perC='';
+        if (prevSz) {
+          const diff = parseFloat(sz.replace('#','')) - parseFloat(prevSz.replace('#',''));
+          if (diff>0) { perG=((parseFloat(avgG)-prevG)/diff).toFixed(3); perC=Math.round((avgC-prevC)/diff); }
+        }
+        if (i===0) lines.push([pk,p.qty,avgMaking,avgMetal,avgLoose,avgCost,sz,avgG,avgC,perG,perC].join(','));
+        else lines.push(['','','','','','',sz,avgG,avgC,perG,perC].join(','));
+        prevSz=sz; prevG=parseFloat(avgG); prevC=avgC;
+      });
+    }
+  });
+  dlCSV(lines, 'SAKA_商品別集計_' + new Date().toISOString().slice(0,10) + '.csv');
+}
+
+// 履歴詳細表示
+function viewHistoryDetail(id) {
+  const entry = history.find(e => e.id === id);
+  if (!entry) return;
+
+  // メタ情報をセット
+  document.getElementById('metaDate').value = entry.date || '';
+  document.getElementById('metaSlipNo').value = entry.slip_no || '';
+  document.getElementById('metaSubject').value = entry.subject || '';
+
+  // 伝票バッジがあれば削除
+  const badge = document.getElementById('slipBadges');
+  if (badge) badge.remove();
+
+  // rowsを表示
+  currentData = { _rows: entry.rows, _readOnly: true };
+  const tbody = document.getElementById('productsBody');
+  tbody.innerHTML = '';
+  entry.rows.forEach((row, i) => {
+    const tr = document.createElement('tr');
+    tr.className = 'product-row';
+    const metalTag = getMetalTag(row.metalType, row.metalSuffix);
+    tr.innerHTML = `
+      <td><input class="td-input" value="${row.sakaModel}" readonly style="background:var(--bg)"></td>
+      <td><input class="td-input" style="max-width:70px;background:var(--bg)" value="${row.size}" readonly></td>
+      <td>${metalTag}</td>
+      <td style="text-align:center">1</td>
+      <td style="text-align:right">${fmt(row.makingUnit)}</td>
+      <td style="text-align:right">${(row.metalGrams||0).toFixed(2)}</td>
+      <td style="text-align:right">${fmt(row.metalUnitPrice)}</td>
+      <td style="text-align:right">${fmt(row.metalAmount)}</td>
+      <td style="font-size:11px;color:var(--text-sub)">${row.looseDesc||''}</td>
+      <td style="text-align:right">${row.looseAmount > 0 ? fmt(row.looseAmount) : '—'}</td>
+      <td style="text-align:right;font-weight:500">${fmt(row.costTotal)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // ボタンラベルを「閲覧中」に
+  document.getElementById('btnConfirm').textContent = '閉じる（読み取り専用）';
+  document.getElementById('btnConfirm').onclick = clearResult;
+
+  updateTotals();
+  document.getElementById('resultSection').style.display = 'block';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function clearResult() {
   currentData = null;
   document.getElementById('resultSection').style.display = 'none';
@@ -1149,7 +1447,10 @@ function renderHistory() {
         ${models.map(m => `<span class="history-tag">${m}</span>`).join('')}
         <span style="color:var(--text-sub);font-size:11px;align-self:center">${entry.rows.length}点</span>
       </div>
-      <div class="history-total">${fmt(totalCost)}<span style="font-size:11px;color:var(--text-sub)"> 円</span></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+        <div class="history-total">${fmt(totalCost)}<span style="font-size:11px;color:var(--text-sub)"> 円</span></div>
+        <button onclick="viewHistoryDetail(${entry.id})" style="padding:3px 10px;font-size:11px;background:var(--gold-light);border:1px solid var(--gold);border-radius:2px;cursor:pointer;color:var(--text);font-family:inherit">詳細</button>
+      </div>
     `;
     ul.appendChild(li);
   });
@@ -1190,13 +1491,16 @@ function loadDummyData() {
 
 // ==================== 集計レポート ====================
 let currentReport = 'monthly';
+const REPORT_TABS = ['monthly','product','yearly','metal','size'];
 
 function switchReport(type) {
   currentReport = type;
-  document.getElementById('btnMonthly').style.background = type === 'monthly' ? 'var(--accent)' : '#fff';
-  document.getElementById('btnMonthly').style.color = type === 'monthly' ? '#fff' : 'var(--accent)';
-  document.getElementById('btnProduct').style.background = type === 'product' ? 'var(--accent)' : '#fff';
-  document.getElementById('btnProduct').style.color = type === 'product' ? '#fff' : 'var(--accent)';
+  REPORT_TABS.forEach(t => {
+    const btn = document.getElementById('btn_' + t);
+    if (!btn) return;
+    btn.style.background = t === type ? 'var(--accent)' : '#fff';
+    btn.style.color = t === type ? '#fff' : 'var(--accent)';
+  });
   renderReport();
 }
 
@@ -1206,7 +1510,10 @@ function renderReport() {
   if (!history || !history.length) { sec.style.display = 'none'; return; }
   sec.style.display = 'block';
   if (currentReport === 'monthly') renderMonthly(body);
-  else renderProduct(body);
+  else if (currentReport === 'product') renderProduct(body);
+  else if (currentReport === 'yearly') renderYearly(body);
+  else if (currentReport === 'metal') renderMetalTrend(body);
+  else if (currentReport === 'size') renderSizeChart(body);
 }
 
 function renderMonthly(body) {
@@ -1216,102 +1523,443 @@ function renderMonthly(body) {
     const m = dateStr.match(/(\d{4})年(\d{2})月/);
     if (!m) continue;
     const key = m[1] + '年' + m[2] + '月';
-    if (!months[key]) months[key] = { qty:0, making:0, metal:0, loose:0, cost:0 };
+    if (!months[key]) months[key] = { qty:0, making:0, metal:0, loose:0, cost:0, products:{} };
     for (const r of (entry.rows || [])) {
       months[key].qty++;
       months[key].making += r.makingUnit || 0;
       months[key].metal += r.metalAmount || 0;
       months[key].loose += r.looseAmount || 0;
       months[key].cost += r.costTotal || 0;
+      // 商品別集計
+      const pk = r.sakaModel || '不明';
+      if (!months[key].products[pk]) months[key].products[pk] = { qty:0, cost:0, sizes:[] };
+      months[key].products[pk].qty++;
+      months[key].products[pk].cost += r.costTotal || 0;
+      if (r.size && !months[key].products[pk].sizes.includes(r.size)) months[key].products[pk].sizes.push(r.size);
     }
   }
   const keys = Object.keys(months).sort().reverse();
   if (!keys.length) { body.innerHTML = '<div class="empty-state">データがありません</div>'; return; }
 
-  let html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:var(--bg)">'
-    + '<th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">月</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">納品点数</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">製作費合計</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">地金代合計</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">ルース代合計</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">原価合計</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">平均原価/点</th>'
-    + '</tr></thead><tbody>';
-
+  body.innerHTML = '';
   const total = { qty:0, making:0, metal:0, loose:0, cost:0 };
-  for (const key of keys) {
+
+  keys.forEach(key => {
     const mo = months[key];
     total.qty += mo.qty; total.making += mo.making; total.metal += mo.metal; total.loose += mo.loose; total.cost += mo.cost;
-    const avg = mo.qty > 0 ? Math.round(mo.cost / mo.qty) : 0;
-    html += '<tr style="border-bottom:1px solid var(--border-light)">'
-      + '<td style="padding:8px 12px;font-weight:500">' + key + '</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + mo.qty + '点</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + fmt(mo.making) + '円</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + fmt(mo.metal) + '円</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + (mo.loose > 0 ? fmt(mo.loose)+'円' : '—') + '</td>'
-      + '<td style="padding:8px 12px;text-align:right;font-weight:500">' + fmt(mo.cost) + '円</td>'
-      + '<td style="padding:8px 12px;text-align:right;color:var(--text-sub)">' + fmt(avg) + '円</td>'
-      + '</tr>';
-  }
-  html += '<tr style="background:var(--bg);font-weight:500;border-top:2px solid var(--border)">'
-    + '<td style="padding:8px 12px">合計</td>'
-    + '<td style="padding:8px 12px;text-align:right">' + total.qty + '点</td>'
-    + '<td style="padding:8px 12px;text-align:right">' + fmt(total.making) + '円</td>'
-    + '<td style="padding:8px 12px;text-align:right">' + fmt(total.metal) + '円</td>'
-    + '<td style="padding:8px 12px;text-align:right">' + (total.loose > 0 ? fmt(total.loose)+'円' : '—') + '</td>'
-    + '<td style="padding:8px 12px;text-align:right">' + fmt(total.cost) + '円</td>'
-    + '<td style="padding:8px 12px;text-align:right;color:var(--text-sub)">' + fmt(total.qty > 0 ? Math.round(total.cost/total.qty) : 0) + '円</td>'
-    + '</tr>';
-  html += '</tbody></table></div>';
-  body.innerHTML = html;
+
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--border);border-radius:4px;margin-bottom:8px;overflow:hidden';
+
+    // サマリー行
+    const summary = document.createElement('div');
+    summary.style.cssText = 'display:grid;grid-template-columns:140px 70px 1fr 1fr 1fr 110px 40px;align-items:center;padding:10px 14px;cursor:pointer;background:var(--surface);gap:8px;font-size:12px';
+    summary.innerHTML = '<div style="font-weight:500;font-size:13px">' + key + '</div>'
+      + '<div style="text-align:right">' + mo.qty + '点</div>'
+      + '<div style="text-align:right">' + fmt(mo.making) + '円</div>'
+      + '<div style="text-align:right">' + fmt(mo.metal) + '円</div>'
+      + '<div style="text-align:right">' + (mo.loose > 0 ? fmt(mo.loose)+'円' : '—') + '</div>'
+      + '<div style="text-align:right;font-weight:500;color:var(--gold)">' + fmt(mo.cost) + '円</div>'
+      + '<div style="text-align:center;color:var(--text-sub)" class="toggle-arrow">▶</div>';
+
+    // 商品内訳（展開）
+    const detail = document.createElement('div');
+    detail.style.cssText = 'display:none;background:var(--bg);border-top:1px solid var(--border);padding:10px 16px';
+
+    const pkeys = Object.keys(mo.products).sort((a,b) => mo.products[b].qty - mo.products[a].qty);
+    const maxQty = Math.max(...pkeys.map(k => mo.products[k].qty));
+
+    let detHtml = '<div style="font-size:11px;color:var(--text-sub);margin-bottom:8px">この月の商品内訳</div>';
+    pkeys.forEach(pk => {
+      const pp = mo.products[pk];
+      const barW = Math.round((pp.qty / maxQty) * 120);
+      const sizes = pp.sizes.length ? pp.sizes.sort().join('/') : '—';
+      const avgCost = Math.round(pp.cost / pp.qty);
+      detHtml += '<div style="display:grid;grid-template-columns:160px 50px 130px 1fr;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-light);font-size:12px">'
+        + '<div style="font-weight:500">' + pk + '</div>'
+        + '<div style="text-align:right;color:var(--text-sub)">' + pp.qty + '点</div>'
+        + '<div><div style="background:var(--gold);height:8px;border-radius:2px;width:' + barW + 'px;display:inline-block"></div></div>'
+        + '<div style="color:var(--text-sub)">' + sizes + '　平均原価 ' + fmt(avgCost) + '円</div>'
+        + '</div>';
+    });
+    detail.innerHTML = detHtml;
+
+    summary.addEventListener('click', () => {
+      const arrow = summary.querySelector('.toggle-arrow');
+      if (detail.style.display === 'none') {
+        detail.style.display = 'block';
+        arrow.textContent = '▼';
+        summary.style.background = 'var(--gold-light)';
+      } else {
+        detail.style.display = 'none';
+        arrow.textContent = '▶';
+        summary.style.background = 'var(--surface)';
+      }
+    });
+
+    card.appendChild(summary);
+    card.appendChild(detail);
+    body.appendChild(card);
+  });
+
+  // ヘッダー
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:grid;grid-template-columns:140px 70px 1fr 1fr 1fr 110px 40px;gap:8px;padding:6px 14px;font-size:10px;color:var(--text-sub);margin-bottom:4px';
+  hdr.innerHTML = '<div>月</div><div style="text-align:right">納品点数</div><div style="text-align:right">製作費合計</div><div style="text-align:right">地金代合計</div><div style="text-align:right">ルース代合計</div><div style="text-align:right">原価合計</div><div></div>';
+  body.insertBefore(hdr, body.firstChild);
+
+  // 合計行
+  const totRow = document.createElement('div');
+  totRow.style.cssText = 'display:grid;grid-template-columns:140px 70px 1fr 1fr 1fr 110px 40px;gap:8px;padding:10px 14px;font-size:12px;font-weight:500;background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:8px';
+  totRow.innerHTML = '<div>合計</div><div style="text-align:right">' + total.qty + '点</div>'
+    + '<div style="text-align:right">' + fmt(total.making) + '円</div>'
+    + '<div style="text-align:right">' + fmt(total.metal) + '円</div>'
+    + '<div style="text-align:right">' + (total.loose > 0 ? fmt(total.loose)+'円' : '—') + '</div>'
+    + '<div style="text-align:right;color:var(--gold)">' + fmt(total.cost) + '円</div><div></div>';
+  body.appendChild(totRow);
 }
 
 function renderProduct(body) {
+  // 商品別集計＋詳細履歴を保持
   const products = {};
   for (const entry of history) {
     for (const r of (entry.rows || [])) {
       const key = r.sakaModel || '不明';
-      if (!products[key]) products[key] = { qty:0, making:0, metal:0, loose:0, cost:0, lastDate:'', lastGPrice:0 };
+      if (!products[key]) products[key] = { qty:0, making:0, metal:0, loose:0, cost:0, lastDate:'', lastGPrice:0, details:[] };
       products[key].qty++;
       products[key].making += r.makingUnit || 0;
       products[key].metal += r.metalAmount || 0;
       products[key].loose += r.looseAmount || 0;
       products[key].cost += r.costTotal || 0;
+      products[key].details.push({
+        date: entry.date || '',
+        size: r.size || '—',
+        grams: r.metalGrams || 0,
+        gPrice: r.metalUnitPrice || 0,
+        metalAmt: r.metalAmount || 0,
+        making: r.makingUnit || 0,
+        loose: r.looseAmount || 0,
+        cost: r.costTotal || 0
+      });
       if (!products[key].lastDate || (entry.date||'') > products[key].lastDate) {
         products[key].lastDate = entry.date || '';
         products[key].lastGPrice = r.metalUnitPrice || 0;
       }
     }
   }
+
   const keys = Object.keys(products).sort();
   if (!keys.length) { body.innerHTML = '<div class="empty-state">データがありません</div>'; return; }
 
-  let html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:var(--bg)">'
-    + '<th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">SAKA型番</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">累計納品</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">平均製作費</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">平均地金代</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">平均ルース代</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">平均原価</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">最新地金単価</th>'
-    + '<th style="padding:8px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-sub)">最終納品日</th>'
-    + '</tr></thead><tbody>';
+  const wrap = document.createElement('div');
 
-  for (const key of keys) {
+  keys.forEach((key, ki) => {
     const p = products[key];
-    html += '<tr style="border-bottom:1px solid var(--border-light)">'
-      + '<td style="padding:8px 12px;font-weight:500">' + key + '</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + p.qty + '点</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + fmt(Math.round(p.making/p.qty)) + '円</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + fmt(Math.round(p.metal/p.qty)) + '円</td>'
-      + '<td style="padding:8px 12px;text-align:right">' + (p.loose > 0 ? fmt(Math.round(p.loose/p.qty))+'円' : '—') + '</td>'
-      + '<td style="padding:8px 12px;text-align:right;font-weight:500">' + fmt(Math.round(p.cost/p.qty)) + '円</td>'
-      + '<td style="padding:8px 12px;text-align:right;color:var(--text-sub)">' + fmt(p.lastGPrice) + '円/g</td>'
-      + '<td style="padding:8px 12px;text-align:right;color:var(--text-sub);font-size:11px">' + p.lastDate + '</td>'
-      + '</tr>';
+    // 詳細を日付降順ソート
+    p.details.sort((a,b) => b.date.localeCompare(a.date));
+
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--border);border-radius:4px;margin-bottom:10px;overflow:hidden';
+
+    // サマリー行（クリックで展開）
+    const summary = document.createElement('div');
+    summary.style.cssText = 'display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 40px;align-items:center;padding:10px 14px;cursor:pointer;background:var(--surface);gap:8px';
+    summary.innerHTML = ''
+      + '<div style="font-weight:500;font-size:13px">' + key + '</div>'
+      + '<div style="text-align:right;font-size:12px">' + p.qty + '点</div>'
+      + '<div style="text-align:right;font-size:12px">' + fmt(Math.round(p.making/p.qty)) + '円</div>'
+      + '<div style="text-align:right;font-size:12px">' + fmt(Math.round(p.metal/p.qty)) + '円</div>'
+      + '<div style="text-align:right;font-size:12px">' + (p.loose > 0 ? fmt(Math.round(p.loose/p.qty))+'円' : '—') + '</div>'
+      + '<div style="text-align:right;font-size:13px;font-weight:500;color:var(--gold)">' + fmt(Math.round(p.cost/p.qty)) + '円</div>'
+      + '<div style="text-align:center;color:var(--text-sub);font-size:14px" class="toggle-arrow">▶</div>';
+
+    // 詳細テーブル
+    const detail = document.createElement('div');
+    detail.style.cssText = 'display:none;background:var(--bg);border-top:1px solid var(--border)';
+
+    // 詳細ヘッダー
+    let detHtml = '<div style="display:grid;grid-template-columns:120px 60px 70px 80px 80px 80px 80px 90px;gap:8px;padding:7px 14px;font-size:10px;color:var(--text-sub);border-bottom:1px solid var(--border-light)">'
+      + '<div>納品日</div><div style="text-align:right">号サイズ</div><div style="text-align:right">地金量</div>'
+      + '<div style="text-align:right">地金単価</div><div style="text-align:right">地金代</div>'
+      + '<div style="text-align:right">製作費</div><div style="text-align:right">ルース代</div>'
+      + '<div style="text-align:right">原価合計</div></div>';
+
+    p.details.forEach(d => {
+      detHtml += '<div style="display:grid;grid-template-columns:120px 60px 70px 80px 80px 80px 80px 90px;gap:8px;padding:7px 14px;font-size:12px;border-bottom:1px solid var(--border-light)">'
+        + '<div style="color:var(--text-sub)">' + d.date + '</div>'
+        + '<div style="text-align:right">' + d.size + '</div>'
+        + '<div style="text-align:right">' + d.grams.toFixed(2) + 'g</div>'
+        + '<div style="text-align:right;color:var(--text-sub)">' + fmt(d.gPrice) + '円/g</div>'
+        + '<div style="text-align:right">' + fmt(d.metalAmt) + '円</div>'
+        + '<div style="text-align:right">' + fmt(d.making) + '円</div>'
+        + '<div style="text-align:right">' + (d.loose > 0 ? fmt(d.loose)+'円' : '—') + '</div>'
+        + '<div style="text-align:right;font-weight:500">' + fmt(d.cost) + '円</div>'
+        + '</div>';
+    });
+    detail.innerHTML = detHtml;
+
+    // クリックで展開
+    summary.addEventListener('click', () => {
+      const arrow = summary.querySelector('.toggle-arrow');
+      if (detail.style.display === 'none') {
+        detail.style.display = 'block';
+        arrow.textContent = '▼';
+        summary.style.background = 'var(--gold-light)';
+      } else {
+        detail.style.display = 'none';
+        arrow.textContent = '▶';
+        summary.style.background = 'var(--surface)';
+      }
+    });
+
+    card.appendChild(summary);
+    card.appendChild(detail);
+    wrap.appendChild(card);
+  });
+
+  // ヘッダーラベル
+  const header = document.createElement('div');
+  header.style.cssText = 'display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 40px;gap:8px;padding:7px 14px;font-size:10px;color:var(--text-sub);margin-bottom:4px';
+  header.innerHTML = '<div>SAKA型番</div><div style="text-align:right">累計納品</div><div style="text-align:right">平均製作費</div><div style="text-align:right">平均地金代</div><div style="text-align:right">平均ルース代</div><div style="text-align:right">平均原価</div><div></div>';
+
+  body.innerHTML = '';
+  body.appendChild(header);
+  body.appendChild(wrap);
+}
+
+
+// ==================== 年間サマリー ====================
+function renderYearly(body) {
+  const years = {};
+  for (const entry of history) {
+    const m = (entry.date||'').match(/(\d{4})年/);
+    if (!m) continue;
+    const yr = m[1];
+    if (!years[yr]) years[yr] = { qty:0, cost:0, products:{} };
+    for (const r of (entry.rows||[])) {
+      years[yr].qty++;
+      years[yr].cost += r.costTotal||0;
+      const pk = r.sakaModel||'不明';
+      if (!years[yr].products[pk]) years[yr].products[pk] = 0;
+      years[yr].products[pk]++;
+    }
   }
-  html += '</tbody></table></div>';
-  body.innerHTML = html;
+  const ykeys = Object.keys(years).sort().reverse();
+  if (!ykeys.length) { body.innerHTML = '<div class="empty-state">データがありません</div>'; return; }
+
+  body.innerHTML = '';
+  ykeys.forEach(yr => {
+    const y = years[yr];
+    const top = Object.entries(y.products).sort((a,b)=>b[1]-a[1]).slice(0,5);
+    const maxQ = top[0]?top[0][1]:1;
+
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--border);border-radius:4px;margin-bottom:16px;overflow:hidden';
+
+    // 年ヘッダー
+    card.innerHTML = '<div style="background:var(--accent);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">'
+      + '<span style="font-family:EB Garamond,serif;font-size:18px">' + yr + '年</span>'
+      + '<span style="font-size:12px">総納品 ' + y.qty + '点　総原価 ' + fmt(y.cost) + '円</span>'
+      + '</div>';
+
+    // TOP商品バーチャート
+    let inner = '<div style="padding:16px">'
+      + '<div style="font-size:11px;color:var(--text-sub);margin-bottom:10px">納品数 TOP5</div>';
+    top.forEach(([pk, qty], i) => {
+      const barW = Math.round((qty / maxQ) * 200);
+      const medals = ['🥇','🥈','🥉','',''];
+      inner += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+        + '<div style="width:16px;text-align:center;font-size:13px">' + (medals[i]||'') + '</div>'
+        + '<div style="width:140px;font-size:12px;font-weight:' + (i===0?'500':'400') + '">' + pk + '</div>'
+        + '<div style="background:var(--gold);height:10px;border-radius:2px;width:' + barW + 'px;min-width:4px"></div>'
+        + '<div style="font-size:12px;color:var(--text-sub);margin-left:6px">' + qty + '点</div>'
+        + '</div>';
+    });
+    inner += '</div>';
+    card.innerHTML += inner;
+    body.appendChild(card);
+  });
+}
+
+// ==================== 地金単価推移 ====================
+function renderMetalTrend(body) {
+  // 月別・金種別の平均単価を集計
+  const data = {};
+  const metalTypes = new Set();
+  for (const entry of history) {
+    const m = (entry.date||'').match(/(\d{4})年(\d{2})月/);
+    if (!m) continue;
+    const key = m[1] + '-' + m[2];
+    if (!data[key]) data[key] = {};
+    for (const r of (entry.rows||[])) {
+      if (!r.metalType || !r.metalUnitPrice || r.metalUnitPrice < 10) continue;
+      metalTypes.add(r.metalType);
+      if (!data[key][r.metalType]) data[key][r.metalType] = [];
+      data[key][r.metalType].push(r.metalUnitPrice);
+    }
+  }
+  const months = Object.keys(data).sort();
+  if (!months.length) { body.innerHTML = '<div class="empty-state">データがありません</div>'; return; }
+
+  const metals = [...metalTypes].sort();
+  const colors = { 'K18YG':'#b89a6a', 'K10YG':'#e0c080', 'PT900':'#888', 'SV925':'#aaa' };
+
+  // Canvas グラフ
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:16px';
+
+  // 凡例
+  let legend = '<div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">';
+  metals.forEach(mt => {
+    const c = colors[mt] || '#999';
+    legend += '<div style="display:flex;align-items:center;gap:5px;font-size:12px">'
+      + '<div style="width:20px;height:3px;background:' + c + ';border-radius:2px"></div>' + mt + '</div>';
+  });
+  legend += '</div>';
+
+  const canvas = document.createElement('canvas');
+  canvas.id = 'metalChart';
+  canvas.style.cssText = 'width:100%;height:240px';
+  wrap.innerHTML = legend;
+  wrap.appendChild(canvas);
+
+  // 数値テーブル
+  let tbl = '<div style="overflow-x:auto;margin-top:16px"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="background:var(--bg)">'
+    + '<th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)">月</th>';
+  metals.forEach(mt => { tbl += '<th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border)">' + mt + '</th>'; });
+  tbl += '</tr></thead><tbody>';
+  months.slice().reverse().forEach(mk => {
+    const label = mk.replace('-', '年') + '月';
+    tbl += '<tr style="border-bottom:1px solid var(--border-light)"><td style="padding:6px 10px">' + label + '</td>';
+    metals.forEach(mt => {
+      const vals = data[mk][mt];
+      const avg = vals ? Math.round(vals.reduce((s,v)=>s+v,0)/vals.length) : null;
+      tbl += '<td style="padding:6px 10px;text-align:right">' + (avg ? fmt(avg)+'円/g' : '—') + '</td>';
+    });
+    tbl += '</tr>';
+  });
+  tbl += '</tbody></table></div>';
+
+  body.innerHTML = '';
+  body.appendChild(wrap);
+  body.innerHTML += tbl;
+
+  // Chart.js でグラフ描画
+  const script = document.createElement('script');
+  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js';
+  script.onload = () => {
+    const ctx = document.getElementById('metalChart');
+    if (!ctx) return;
+    const datasets = metals.map(mt => ({
+      label: mt,
+      data: months.map(mk => {
+        const vals = data[mk][mt];
+        return vals ? Math.round(vals.reduce((s,v)=>s+v,0)/vals.length) : null;
+      }),
+      borderColor: colors[mt] || '#999',
+      backgroundColor: 'transparent',
+      tension: 0.3,
+      spanGaps: true,
+      pointRadius: 4,
+      borderWidth: 2
+    }));
+    new Chart(ctx, {
+      type: 'line',
+      data: { labels: months.map(m => m.replace('-','年')+'月'), datasets },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { ticks: { callback: v => fmt(v)+'円' } }
+        }
+      }
+    });
+  };
+  document.head.appendChild(script);
+}
+
+// ==================== 号数別原価 ====================
+function renderSizeChart(body) {
+  // 型番×サイズ別の平均グラム・平均原価
+  const data = {};
+  for (const entry of history) {
+    for (const r of (entry.rows||[])) {
+      if (!r.size) continue;
+      const pk = r.sakaModel||'不明';
+      if (!data[pk]) data[pk] = {};
+      if (!data[pk][r.size]) data[pk][r.size] = { grams:[], metalAmt:[], making:[], cost:[] };
+      data[pk][r.size].grams.push(r.metalGrams||0);
+      data[pk][r.size].metalAmt.push(r.metalAmount||0);
+      data[pk][r.size].making.push(r.makingUnit||0);
+      data[pk][r.size].cost.push(r.costTotal||0);
+    }
+  }
+
+  const pkeys = Object.keys(data).sort();
+  if (!pkeys.length) { body.innerHTML = '<div class="empty-state">サイズデータがありません</div>'; return; }
+
+  body.innerHTML = '';
+  pkeys.forEach(pk => {
+    const sizes = Object.keys(data[pk]).sort((a,b) => {
+      const na = parseFloat(a.replace('#','')), nb = parseFloat(b.replace('#',''));
+      return na - nb;
+    });
+    if (sizes.length < 2) return; // 1サイズのみはスキップ
+
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid var(--border);border-radius:4px;margin-bottom:12px;overflow:hidden';
+
+    let html = '<div style="padding:10px 14px;background:var(--bg);font-weight:500;font-size:13px;border-bottom:1px solid var(--border)">' + pk + '</div>'
+      + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:var(--surface)">'
+      + '<th style="padding:7px 12px;text-align:left;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">号サイズ</th>'
+      + '<th style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">平均地金量</th>'
+      + '<th style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">平均地金代</th>'
+      + '<th style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">平均製作費</th>'
+      + '<th style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">平均原価</th>'
+      + '<th style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">1号あたり増加</th>'
+      + '<th style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub);border-bottom:1px solid var(--border)">サンプル数</th>'
+      + '</tr></thead><tbody>';
+
+    let prevSize = null, prevCost = null, prevGrams = null;
+    sizes.forEach(sz => {
+      const d = data[pk][sz];
+      const avg = arr => arr.length ? Math.round(arr.reduce((s,v)=>s+v,0)/arr.length) : 0;
+      const avgG = arr => arr.length ? (arr.reduce((s,v)=>s+v,0)/arr.length) : 0;
+      const avgGrams = avgG(d.grams);
+      const avgMetal = avg(d.metalAmt);
+      const avgMaking = avg(d.making);
+      const avgCost = avg(d.cost);
+      const n = d.cost.length;
+
+      // 1号あたり増加（前サイズとの差÷号数差）
+      let perSize = '—';
+      if (prevSize !== null && prevCost !== null) {
+        const sizeNum = parseFloat(sz.replace('#',''));
+        const prevNum = parseFloat(prevSize.replace('#',''));
+        const diff = sizeNum - prevNum;
+        if (diff > 0) {
+          const costDiff = avgCost - prevCost;
+          const gramDiff = avgGrams - prevGrams;
+          perSize = '+' + fmt(Math.round(costDiff/diff)) + '円 / +' + (gramDiff/diff).toFixed(2) + 'g';
+        }
+      }
+
+      html += '<tr style="border-bottom:1px solid var(--border-light)">'
+        + '<td style="padding:7px 12px;font-weight:500">' + sz + '</td>'
+        + '<td style="padding:7px 12px;text-align:right">' + avgGrams.toFixed(2) + 'g</td>'
+        + '<td style="padding:7px 12px;text-align:right">' + fmt(avgMetal) + '円</td>'
+        + '<td style="padding:7px 12px;text-align:right">' + fmt(avgMaking) + '円</td>'
+        + '<td style="padding:7px 12px;text-align:right;font-weight:500">' + fmt(avgCost) + '円</td>'
+        + '<td style="padding:7px 12px;text-align:right;font-size:11px;color:var(--text-sub)">' + perSize + '</td>'
+        + '<td style="padding:7px 12px;text-align:right;color:var(--text-sub)">' + n + '件</td>'
+        + '</tr>';
+
+      prevSize = sz; prevCost = avgCost; prevGrams = avgGrams;
+    });
+    html += '</tbody></table></div>';
+    card.innerHTML = html;
+    body.appendChild(card);
+  });
 }
 
 function toggleSlip(el) {
