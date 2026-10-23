@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Noto+Sans+JP:wght@300;400;500&display=swap');
 
@@ -436,6 +437,7 @@
       <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text)">クラウド保存（BIJOU Manager Firebase）</div>
       <p style="color:var(--text-sub);font-size:12px;line-height:1.7;margin:0 0 10px">納品履歴をBIJOU ManagerのFirebaseに保存します。PCとiPadで同じデータを共有できます。</p>
       <div id="cloudStatus" style="font-size:11px;color:var(--text-sub);margin-bottom:10px"></div>
+      <div style="font-size:11px;margin-bottom:10px">ログイン中: <span id="authUserEmail">-</span> <a href="#" onclick="googleLogout();return false;" style="margin-left:6px">ログアウト</a></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="enableCloudSave()" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:3px;font-family:inherit;font-size:12px;cursor:pointer">クラウド保存を有効にする</button>
         <button onclick="syncFromCloud()" style="padding:7px 16px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-family:inherit;font-size:12px;cursor:pointer;color:var(--text)">クラウドから読み込む</button>
@@ -728,6 +730,7 @@ function deleteAlias(raw) {
 
 // ==================== クラウド保存 ====================
 async function enableCloudSave() {
+  await ensureSignedIn();
   const statusEl = document.getElementById('cloudStatus');
   statusEl.textContent = '接続確認中...';
   try {
@@ -745,6 +748,7 @@ async function enableCloudSave() {
 }
 
 async function syncFromCloud() {
+  await ensureSignedIn();
   const statusEl = document.getElementById('cloudStatus');
   statusEl.textContent = 'クラウドから読み込み中...';
   try {
@@ -764,6 +768,7 @@ async function syncFromCloud() {
 }
 
 async function pushToCloud() {
+  await ensureSignedIn();
   if (!confirm(`ローカルの${history.length}件のデータをクラウドに送信しますか？`)) return;
   const statusEl = document.getElementById('cloudStatus');
   statusEl.textContent = 'アップロード中...';
@@ -906,6 +911,7 @@ function clearHistoryFromSettings() {
 }
 
 async function clearCloudHistory() {
+  await ensureSignedIn();
   if (!_firebaseEnabled) { alert('クラウド保存が有効になっていません。'); return; }
   if (!confirm('クラウド上の履歴データをすべて削除しますか？\nこの操作は取り消せません。ローカルのデータは残ります。')) return;
   if (!confirm('本当によろしいですか？他の端末のデータにも影響します。')) return;
@@ -958,11 +964,13 @@ const BIJOU_CONFIG = {
 };
 
 let bijouDb = null;
+let bijouAuth = null;
 function getBijouDb() {
   if (bijouDb) return bijouDb;
   try {
     const app = firebase.apps.length ? firebase.app('bijou') : firebase.initializeApp(BIJOU_CONFIG, 'bijou');
     bijouDb = firebase.firestore(app);
+    bijouAuth = firebase.auth(app);
     return bijouDb;
   } catch(e) {
     console.error('Firebase初期化エラー:', e);
@@ -970,10 +978,65 @@ function getBijouDb() {
   }
 }
 
+// ===== Googleログイン =====
+// データはFirestoreのセキュリティルールで「許可したGoogleアカウントだけ」に制限する。
+function showGoogleLogin(errMsg, showSwitch) {
+  document.getElementById('googleLoginScreen').style.display = 'flex';
+  const err = document.getElementById('googleLoginError');
+  err.textContent = errMsg || '';
+  err.style.display = errMsg ? 'block' : 'none';
+  document.getElementById('googleSwitchBtn').style.display = showSwitch ? 'block' : 'none';
+}
+
+let _signInPromise = null;
+function ensureSignedIn() {
+  if (_signInPromise) return _signInPromise;
+  getBijouDb();
+  _signInPromise = new Promise(resolve => {
+    const unsub = bijouAuth.onAuthStateChanged(user => {
+      if (!user) { showGoogleLogin(); return; }
+      unsub();
+      document.getElementById('googleLoginScreen').style.display = 'none';
+      const el = document.getElementById('authUserEmail');
+      if (el) el.textContent = user.email;
+      resolve(user);
+    });
+  });
+  return _signInPromise;
+}
+
+async function googleLogin() {
+  try {
+    getBijouDb();
+    await bijouAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+  } catch(e) {
+    if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return;
+    showGoogleLogin('ログインできませんでした（' + e.code + '）');
+  }
+}
+
+async function googleLogout(skipConfirm) {
+  if (!skipConfirm && !confirm('ログアウトしますか？')) return;
+  getBijouDb();
+  await bijouAuth.signOut();
+  location.reload();
+}
+
+// 権限エラーのときはログイン画面に案内する
+function handleCloudPermissionError(e) {
+  if (e && e.code === 'permission-denied') {
+    const email = bijouAuth && bijouAuth.currentUser ? bijouAuth.currentUser.email : '';
+    showGoogleLogin('このアカウント（' + email + '）には利用する権限がありません。', true);
+    return true;
+  }
+  return false;
+}
+
 // 型番マスタ（BIJOU Managerから同期したもの）
 let modelMaster = JSON.parse(localStorage.getItem('saka_model_master') || '[]');
 
 async function syncFromBijou() {
+  await ensureSignedIn();
   const statusEl = document.getElementById('syncStatus');
   statusEl.textContent = '同期中...';
   statusEl.style.color = 'var(--warn)';
@@ -1198,6 +1261,7 @@ async function loadFromFirebase() {
     return entries;
   } catch(e) {
     console.warn('Firebase読み込みエラー:', e.message);
+    handleCloudPermissionError(e);
     return null;
   }
 }
@@ -4208,7 +4272,7 @@ function toggleSlip(el) {
 // 初期化
 updateKeyStatus();
 if (!localStorage.getItem('saka_api_key')) showKeyModal();
-if (localStorage.getItem('saka_cloud_enabled') === '1') {
+if (localStorage.getItem('saka_cloud_enabled') === '1') ensureSignedIn().then(() => {
   _firebaseEnabled = true;
   // 設定データ（地金単価・購入記録・エイリアス等）の同期
   syncSettingsFromCloud().then(() => {
@@ -4236,9 +4300,20 @@ if (localStorage.getItem('saka_cloud_enabled') === '1') {
       }
     }
   });
-}
+});
 renderHistory();
 renderReport();
 </script>
+<!-- Googleログイン画面（Firebase Authentication） -->
+<div id="googleLoginScreen" style="display:none;position:fixed;inset:0;z-index:10000;background:var(--accent);align-items:center;justify-content:center;padding:20px;">
+  <div style="background:#fff;border-radius:14px;padding:36px 30px;max-width:360px;width:100%;text-align:center;">
+    <div style="font-size:18px;font-weight:600;margin-bottom:6px;">SAKA 納品書読み取りツール</div>
+    <div style="font-size:28px;margin:14px 0;">🔐</div>
+    <p style="font-size:13px;margin-bottom:16px;">クラウドのデータを使うには<br>Googleアカウントでログインしてください</p>
+    <div id="googleLoginError" style="display:none;font-size:12px;color:#C25C5C;margin-bottom:12px;"></div>
+    <button onclick="googleLogin()" style="width:100%;padding:12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer;">Googleでログイン</button>
+    <button id="googleSwitchBtn" onclick="googleLogout(true)" style="display:none;width:100%;margin-top:10px;padding:10px;border:1px solid #ccc;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;">別のアカウントでログイン</button>
+  </div>
+</div>
 </body>
 </html>
