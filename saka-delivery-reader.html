@@ -1327,6 +1327,12 @@ async function processBatch(files) {
       for (const inv of invoices) {
         if (inv.slip_no) slipNos.push(inv.slip_no);
         const rows = await buildRows(inv);
+        // BIJOU Manager連携用に各行へ伝票情報を付与
+        rows.forEach(r => {
+          r._slip_no = inv.slip_no || '';
+          r._inv_date = inv.date || '';
+          r._inv_subject = inv.subject || '';
+        });
         allRows.push(...rows);
       }
       const dates = [...new Set(invoices.map(inv => inv.date).filter(Boolean))];
