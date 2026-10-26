@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Noto+Sans+JP:wght@300;400;500&display=swap');
 
@@ -435,6 +436,7 @@
     <div style="border-top:1px solid var(--border);margin-bottom:24px;padding-top:20px">
       <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text)">クラウド保存（BIJOU Manager Firebase）</div>
       <p style="color:var(--text-sub);font-size:12px;line-height:1.7;margin:0 0 10px">納品履歴をBIJOU ManagerのFirebaseに保存します。PCとiPadで同じデータを共有できます。</p>
+      <div id="authStatus" style="font-size:12px;margin-bottom:10px"></div>
       <div id="cloudStatus" style="font-size:11px;color:var(--text-sub);margin-bottom:10px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="enableCloudSave()" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:3px;font-family:inherit;font-size:12px;cursor:pointer">クラウド保存を有効にする</button>
@@ -956,15 +958,66 @@ const BIJOU_CONFIG = {
 };
 
 let bijouDb = null;
+let bijouAuth = null;
+let _currentUser = null;
+
+function getBijouApp() {
+  return firebase.apps.find(a => a.name === 'bijou') || firebase.initializeApp(BIJOU_CONFIG, 'bijou');
+}
+
 function getBijouDb() {
   if (bijouDb) return bijouDb;
   try {
-    const app = firebase.apps.length ? firebase.app('bijou') : firebase.initializeApp(BIJOU_CONFIG, 'bijou');
+    const app = getBijouApp();
     bijouDb = firebase.firestore(app);
     return bijouDb;
   } catch(e) {
     console.error('Firebase初期化エラー:', e);
     return null;
+  }
+}
+
+function getBijouAuth() {
+  if (bijouAuth) return bijouAuth;
+  try {
+    const app = getBijouApp();
+    bijouAuth = firebase.auth(app);
+    bijouAuth.onAuthStateChanged(user => {
+      _currentUser = user;
+      updateAuthUI();
+    });
+    return bijouAuth;
+  } catch(e) {
+    console.error('Firebase Auth初期化エラー:', e);
+    return null;
+  }
+}
+
+async function signInWithGoogle() {
+  const auth = getBijouAuth();
+  if (!auth) return;
+  const provider = new firebase.auth.GoogleAuthProvider();
+  try {
+    await auth.signInWithPopup(provider);
+  } catch(e) {
+    console.error('ログインエラー:', e);
+    alert('Googleログインに失敗しました: ' + e.message);
+  }
+}
+
+async function signOut() {
+  const auth = getBijouAuth();
+  if (!auth) return;
+  await auth.signOut();
+}
+
+function updateAuthUI() {
+  const el = document.getElementById('authStatus');
+  if (!el) return;
+  if (_currentUser) {
+    el.innerHTML = `<span style="color:var(--success)">✓ ${_currentUser.email}</span> <button onclick="signOut()" style="margin-left:8px;padding:2px 8px;font-size:11px;border:1px solid var(--border);border-radius:3px;cursor:pointer;background:var(--surface)">ログアウト</button>`;
+  } else {
+    el.innerHTML = `<button onclick="signInWithGoogle()" style="padding:4px 12px;font-size:12px;border:1px solid var(--border);border-radius:4px;cursor:pointer;background:var(--surface);display:flex;align-items:center;gap:6px"><img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" style="width:14px;height:14px">Googleでログイン</button>`;
   }
 }
 
@@ -4111,6 +4164,8 @@ function toggleSlip(el) {
 
 // 初期化
 updateKeyStatus();
+// Firebase Auth初期化（ページ読み込み時に認証状態を確認）
+getBijouAuth();
 if (!localStorage.getItem('saka_api_key')) showKeyModal();
 if (localStorage.getItem('saka_cloud_enabled') === '1') {
   _firebaseEnabled = true;
