@@ -790,6 +790,8 @@ async function pushToCloud() {
 function showSettingsModal() {
   const existing = localStorage.getItem('saka_api_key') || '';
   document.getElementById('keyInput').value = existing;
+  // Auth UI更新
+  updateAuthUI();
   // クラウド状態
   const cloudEl = document.getElementById('cloudStatus');
   if (cloudEl) {
