@@ -8,7 +8,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Noto+Sans+JP:wght@300;400;500&display=swap');
 
@@ -437,7 +436,6 @@
       <div style="font-size:12px;font-weight:500;margin-bottom:8px;color:var(--text)">クラウド保存（BIJOU Manager Firebase）</div>
       <p style="color:var(--text-sub);font-size:12px;line-height:1.7;margin:0 0 10px">納品履歴をBIJOU ManagerのFirebaseに保存します。PCとiPadで同じデータを共有できます。</p>
       <div id="cloudStatus" style="font-size:11px;color:var(--text-sub);margin-bottom:10px"></div>
-      <div style="font-size:11px;margin-bottom:10px">ログイン中: <span id="authUserEmail">-</span> <a href="#" onclick="googleLogout();return false;" style="margin-left:6px">ログアウト</a></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="enableCloudSave()" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:3px;font-family:inherit;font-size:12px;cursor:pointer">クラウド保存を有効にする</button>
         <button onclick="syncFromCloud()" style="padding:7px 16px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-family:inherit;font-size:12px;cursor:pointer;color:var(--text)">クラウドから読み込む</button>
@@ -605,12 +603,10 @@
   <div class="section" style="margin-top:24px;">
     <div class="section-header">
       <h2>納品履歴</h2>
-      <div style="display:flex;gap:8px;align-items:center">
-        <select id="monthSummarySelect" onchange="renderMonthSummary()" style="font-size:11px;padding:4px 8px;border:1px solid var(--border);border-radius:2px;background:var(--surface);color:var(--text);font-family:inherit"></select>
+      <div style="display:flex;gap:8px">
         <button class="btn btn-secondary" style="padding:4px 12px;font-size:11px" onclick="clearHistory()">履歴クリア</button>
       </div>
     </div>
-    <div id="monthSummaryBox" style="display:none;margin:0 0 10px;padding:10px 14px;background:var(--gold-light);border:1px solid var(--gold);border-radius:4px;font-size:12px;display:flex;gap:24px;align-items:center"></div>
     <div class="section-body" id="historyBody">
       <div class="empty-state">まだ保存された納品データはありません</div>
     </div>
@@ -730,7 +726,6 @@ function deleteAlias(raw) {
 
 // ==================== クラウド保存 ====================
 async function enableCloudSave() {
-  await ensureSignedIn();
   const statusEl = document.getElementById('cloudStatus');
   statusEl.textContent = '接続確認中...';
   try {
@@ -748,7 +743,6 @@ async function enableCloudSave() {
 }
 
 async function syncFromCloud() {
-  await ensureSignedIn();
   const statusEl = document.getElementById('cloudStatus');
   statusEl.textContent = 'クラウドから読み込み中...';
   try {
@@ -768,7 +762,6 @@ async function syncFromCloud() {
 }
 
 async function pushToCloud() {
-  await ensureSignedIn();
   if (!confirm(`ローカルの${history.length}件のデータをクラウドに送信しますか？`)) return;
   const statusEl = document.getElementById('cloudStatus');
   statusEl.textContent = 'アップロード中...';
@@ -911,7 +904,6 @@ function clearHistoryFromSettings() {
 }
 
 async function clearCloudHistory() {
-  await ensureSignedIn();
   if (!_firebaseEnabled) { alert('クラウド保存が有効になっていません。'); return; }
   if (!confirm('クラウド上の履歴データをすべて削除しますか？\nこの操作は取り消せません。ローカルのデータは残ります。')) return;
   if (!confirm('本当によろしいですか？他の端末のデータにも影響します。')) return;
@@ -964,13 +956,11 @@ const BIJOU_CONFIG = {
 };
 
 let bijouDb = null;
-let bijouAuth = null;
 function getBijouDb() {
   if (bijouDb) return bijouDb;
   try {
     const app = firebase.apps.length ? firebase.app('bijou') : firebase.initializeApp(BIJOU_CONFIG, 'bijou');
     bijouDb = firebase.firestore(app);
-    bijouAuth = firebase.auth(app);
     return bijouDb;
   } catch(e) {
     console.error('Firebase初期化エラー:', e);
@@ -978,65 +968,10 @@ function getBijouDb() {
   }
 }
 
-// ===== Googleログイン =====
-// データはFirestoreのセキュリティルールで「許可したGoogleアカウントだけ」に制限する。
-function showGoogleLogin(errMsg, showSwitch) {
-  document.getElementById('googleLoginScreen').style.display = 'flex';
-  const err = document.getElementById('googleLoginError');
-  err.textContent = errMsg || '';
-  err.style.display = errMsg ? 'block' : 'none';
-  document.getElementById('googleSwitchBtn').style.display = showSwitch ? 'block' : 'none';
-}
-
-let _signInPromise = null;
-function ensureSignedIn() {
-  if (_signInPromise) return _signInPromise;
-  getBijouDb();
-  _signInPromise = new Promise(resolve => {
-    const unsub = bijouAuth.onAuthStateChanged(user => {
-      if (!user) { showGoogleLogin(); return; }
-      unsub();
-      document.getElementById('googleLoginScreen').style.display = 'none';
-      const el = document.getElementById('authUserEmail');
-      if (el) el.textContent = user.email;
-      resolve(user);
-    });
-  });
-  return _signInPromise;
-}
-
-async function googleLogin() {
-  try {
-    getBijouDb();
-    await bijouAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
-  } catch(e) {
-    if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return;
-    showGoogleLogin('ログインできませんでした（' + e.code + '）');
-  }
-}
-
-async function googleLogout(skipConfirm) {
-  if (!skipConfirm && !confirm('ログアウトしますか？')) return;
-  getBijouDb();
-  await bijouAuth.signOut();
-  location.reload();
-}
-
-// 権限エラーのときはログイン画面に案内する
-function handleCloudPermissionError(e) {
-  if (e && e.code === 'permission-denied') {
-    const email = bijouAuth && bijouAuth.currentUser ? bijouAuth.currentUser.email : '';
-    showGoogleLogin('このアカウント（' + email + '）には利用する権限がありません。', true);
-    return true;
-  }
-  return false;
-}
-
 // 型番マスタ（BIJOU Managerから同期したもの）
 let modelMaster = JSON.parse(localStorage.getItem('saka_model_master') || '[]');
 
 async function syncFromBijou() {
-  await ensureSignedIn();
   const statusEl = document.getElementById('syncStatus');
   statusEl.textContent = '同期中...';
   statusEl.style.color = 'var(--warn)';
@@ -1183,31 +1118,7 @@ async function loadSettingsFromFirebase() {
   }
 }
 
-// 配列同士をidでマージ（両方に存在する場合は新しいレコードを優先、idがないものは両方残す）
-function mergeById(localArr, cloudArr) {
-  localArr = localArr || [];
-  cloudArr = cloudArr || [];
-  const map = new Map();
-  const noId = [];
-  const pick = (a, b) => {
-    // _modifiedAtを比較し、新しい方（更新日時がある方）を優先。両方無ければローカル優先
-    if (!a) return b;
-    if (!b) return a;
-    return (b._modifiedAt || '') > (a._modifiedAt || '') ? b : a;
-  };
-  for (const item of cloudArr) {
-    if (item && item.id != null) map.set(item.id, item);
-    else noId.push(item);
-  }
-  for (const item of localArr) {
-    if (item && item.id != null) map.set(item.id, pick(map.get(item.id), item));
-    else noId.push(item);
-  }
-  return [...map.values(), ...noId].sort((a,b) => (b.startMonth||'').localeCompare(a.startMonth||''));
-}
-
-// ローカルとクラウドの設定をマージして適用
-// metalPurchasesはidベースでマージ（消失防止）、その他はupdatedAtが新しい方を優先
+// ローカルとクラウドの設定をマージして適用（クラウドのupdatedAtが新しい場合はクラウド優先）
 async function syncSettingsFromCloud() {
   if (!_firebaseEnabled) return;
   const cloud = await loadSettingsFromFirebase();
@@ -1215,20 +1126,13 @@ async function syncSettingsFromCloud() {
     await saveSettingsToFirebase();
     return;
   }
-  // 地金購入記録は常に両方のデータをidベースでマージ（どちらか片方にしかないレコードも保持）
-  const mergedPurchases = mergeById(metalPurchases, cloud.metalPurchases);
-  const purchasesChanged = JSON.stringify(mergedPurchases) !== JSON.stringify(metalPurchases)
-    || JSON.stringify(mergedPurchases) !== JSON.stringify(cloud.metalPurchases || []);
-  metalPurchases = mergedPurchases;
-  localStorage.setItem('saka_metal_purchases', JSON.stringify(metalPurchases));
-
   const localUpdatedAt = localStorage.getItem('saka_settings_updated_at') || '';
   if ((cloud.updatedAt||'') > localUpdatedAt) {
     if (cloud.metalPrices) { metalPrices = cloud.metalPrices; localStorage.setItem('saka_metal_prices', JSON.stringify(metalPrices)); }
+    if (cloud.metalPurchases) { metalPurchases = cloud.metalPurchases; localStorage.setItem('saka_metal_purchases', JSON.stringify(metalPurchases)); }
     if (cloud.metalTable) { metalTable = cloud.metalTable; localStorage.setItem('saka_metal_table', JSON.stringify(metalTable)); }
     if (cloud.aliasTable) { aliasTable = cloud.aliasTable; localStorage.setItem('saka_alias_table', JSON.stringify(aliasTable)); }
     localStorage.setItem('saka_settings_updated_at', cloud.updatedAt);
-    if (purchasesChanged) await saveSettingsToFirebase(); // マージ結果をクラウドにも反映
   } else {
     await saveSettingsToFirebase();
   }
@@ -1261,7 +1165,6 @@ async function loadFromFirebase() {
     return entries;
   } catch(e) {
     console.warn('Firebase読み込みエラー:', e.message);
-    handleCloudPermissionError(e);
     return null;
   }
 }
@@ -1666,7 +1569,7 @@ async function callClaudeAPI(base64, isPDF, mimeType) {
   metal_amountには金額欄の合計値（52,422）をそのまま入れる。
   metal_grams_total/display/costはnullのままでよい（JS側でper_unit×個数を計算する）
 - 「@」記号がない場合（グラム数が1個分のみ記載、または合計値がそのまま記載されている場合）は従来通りmetal_grams_display/costに記録する
-- ルースの行は直前の商品に紐付けてloose_stonesに追加する
+- ルースの行は直前の商品に紐付けてloose_stonesに追加する。ただし「ルース×N個」かつ同じ伝票内に同じ型番の商品がN件ある場合は、ルースをN件に均等按分して各商品のloose_stonesに追加する（例：ルース2個×9,450円=18,900円 → 同型番2件それぞれにamount:9450で追加）
 - 「パーツ」「ポスト」「シリコンキャッチ」「金具」「アジャスター」「チェーン」など、商品本体に取り付ける付属パーツの行は、直前の商品に紐付けてattached_partsに追加する（ルースとは別管理）
 - パーツ行に「×3」のような数量表記がある場合、qtyにその数値を入れ、unit_amountには1個あたりの金額（金額欄÷数量）を入れる。数量表記がなければqty=1、unit_amount=金額欄の値
 - ルースはダイヤ（DIA）に限らず、サファイア・ルビー・エメラルド等すべての色石を含む。「ルース」行は石の種類名（グリーンサファイア等）・サイズ（mm）・個数（Pc）をdescにそのまま記録する
@@ -2788,60 +2691,7 @@ function clearHistory() {
 }
 
 // ==================== 履歴描画 ====================
-// 月別の合計金額（伝票に記載された金額の合計、_inv_totalベース。伝票単位で重複なく集計）
-function getMonthlyCostTotals() {
-  const months = {};
-  const seenSlips = {};
-  for (const entry of history) {
-    for (const r of (entry.rows || [])) {
-      const dateStr = r._inv_date || entry.date || '';
-      const m = dateStr.match(/(\d{4})年(\d{2})月/);
-      if (!m) continue;
-      const key = m[1] + '年' + m[2] + '月';
-      const slip = r._slip_no || ('__noslip_' + entry.id);
-      const slipKey = key + '|' + slip;
-      if (seenSlips[slipKey]) continue; // 同じ伝票は1回だけ集計
-      seenSlips[slipKey] = true;
-      const total = (r._inv_total !== null && r._inv_total !== undefined)
-        ? r._inv_total
-        : (r.isLinkedAway ? 0 : (r.isRepair ? (r.makingUnit || 0) : (r.costTotal || 0)));
-      months[key] = (months[key] || 0) + total;
-    }
-  }
-  return months;
-}
-
-// 月選択セレクトを最新の履歴データに合わせて更新
-function populateMonthSummarySelect() {
-  const sel = document.getElementById('monthSummarySelect');
-  if (!sel) return;
-  const months = getMonthlyCostTotals();
-  const keys = Object.keys(months).sort().reverse();
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">月を選択して税抜/税込合計を表示...</option>'
-    + keys.map(k => `<option value="${k}">${k}</option>`).join('');
-  if (keys.includes(prev)) sel.value = prev;
-  renderMonthSummary();
-}
-
-// 選択された月の税抜・税込合計を表示
-function renderMonthSummary() {
-  const sel = document.getElementById('monthSummarySelect');
-  const box = document.getElementById('monthSummaryBox');
-  if (!sel || !box) return;
-  const key = sel.value;
-  if (!key) { box.style.display = 'none'; return; }
-  const months = getMonthlyCostTotals();
-  const taxExcl = months[key] || 0;
-  const taxIncl = Math.round(taxExcl * 1.1);
-  box.style.display = 'flex';
-  box.innerHTML = `<div style="font-weight:500">${key}分（請求書照合用）</div>`
-    + `<div>税抜合計：<span style="font-weight:500;color:var(--gold)">${fmt(taxExcl)}円</span></div>`
-    + `<div>税込合計：<span style="font-weight:500;color:var(--gold)">${fmt(taxIncl)}円</span>（消費税10%換算）</div>`;
-}
-
 function renderHistory() {
-  populateMonthSummarySelect();
   const body = document.getElementById('historyBody');
   if (!history.length) {
     body.innerHTML = '<div class="empty-state">まだ保存された納品データはありません</div>';
@@ -2995,7 +2845,6 @@ function renderReport() {
 }
 
 function renderMonthly(body) {
-  const invoiceTotals = getMonthlyCostTotals();
   const months = {};
   for (const entry of history) {
     for (const r of (entry.rows || [])) {
@@ -3033,17 +2882,13 @@ function renderMonthly(body) {
 
     // サマリー行
     const summary = document.createElement('div');
-    summary.style.cssText = 'display:grid;grid-template-columns:120px 60px 1fr 1fr 1fr 100px 100px 100px 100px 40px;align-items:center;padding:10px 14px;cursor:pointer;background:var(--surface);gap:8px;font-size:12px';
-    const invTotal = invoiceTotals[key] || 0;
+    summary.style.cssText = 'display:grid;grid-template-columns:140px 70px 1fr 1fr 1fr 110px 40px;align-items:center;padding:10px 14px;cursor:pointer;background:var(--surface);gap:8px;font-size:12px';
     summary.innerHTML = '<div style="font-weight:500;font-size:13px">' + key + '</div>'
       + '<div style="text-align:right">' + mo.qty + '点</div>'
       + '<div style="text-align:right">' + fmt(mo.making) + '円</div>'
       + '<div style="text-align:right">' + fmt(mo.metal) + '円</div>'
       + '<div style="text-align:right">' + (mo.loose > 0 ? fmt(mo.loose)+'円' : '—') + '</div>'
       + '<div style="text-align:right;font-weight:500;color:var(--gold)">' + fmt(mo.cost) + '円</div>'
-      + '<div style="text-align:right;font-weight:500;color:var(--gold)">' + fmt(Math.round(mo.cost * 1.1)) + '円</div>'
-      + '<div style="text-align:right;font-weight:500">' + fmt(invTotal) + '円</div>'
-      + '<div style="text-align:right;font-weight:500">' + fmt(Math.round(invTotal * 1.1)) + '円</div>'
       + '<div style="text-align:center;color:var(--text-sub)" class="toggle-arrow">▶</div>';
 
     // 商品内訳（展開）
@@ -3088,22 +2933,18 @@ function renderMonthly(body) {
 
   // ヘッダー
   const hdr = document.createElement('div');
-  hdr.style.cssText = 'display:grid;grid-template-columns:120px 60px 1fr 1fr 1fr 100px 100px 100px 100px 40px;gap:8px;padding:6px 14px;font-size:10px;color:var(--text-sub);margin-bottom:4px';
-  hdr.innerHTML = '<div>月</div><div style="text-align:right">納品点数</div><div style="text-align:right">製作費合計</div><div style="text-align:right">地金代合計</div><div style="text-align:right">ルース代合計</div><div style="text-align:right">原価合計（税抜）</div><div style="text-align:right">原価合計（税込）</div><div style="text-align:right">請求書合計（税抜）</div><div style="text-align:right">請求書合計（税込）</div><div></div>';
+  hdr.style.cssText = 'display:grid;grid-template-columns:140px 70px 1fr 1fr 1fr 110px 40px;gap:8px;padding:6px 14px;font-size:10px;color:var(--text-sub);margin-bottom:4px';
+  hdr.innerHTML = '<div>月</div><div style="text-align:right">納品点数</div><div style="text-align:right">製作費合計</div><div style="text-align:right">地金代合計</div><div style="text-align:right">ルース代合計</div><div style="text-align:right">原価合計</div><div></div>';
   body.insertBefore(hdr, body.firstChild);
 
   // 合計行
-  const totalInvoice = Object.values(invoiceTotals).reduce((a,b)=>a+b, 0);
   const totRow = document.createElement('div');
-  totRow.style.cssText = 'display:grid;grid-template-columns:120px 60px 1fr 1fr 1fr 100px 100px 100px 100px 40px;gap:8px;padding:10px 14px;font-size:12px;font-weight:500;background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:8px';
+  totRow.style.cssText = 'display:grid;grid-template-columns:140px 70px 1fr 1fr 1fr 110px 40px;gap:8px;padding:10px 14px;font-size:12px;font-weight:500;background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:8px';
   totRow.innerHTML = '<div>合計</div><div style="text-align:right">' + total.qty + '点</div>'
     + '<div style="text-align:right">' + fmt(total.making) + '円</div>'
     + '<div style="text-align:right">' + fmt(total.metal) + '円</div>'
     + '<div style="text-align:right">' + (total.loose > 0 ? fmt(total.loose)+'円' : '—') + '</div>'
-    + '<div style="text-align:right;color:var(--gold)">' + fmt(total.cost) + '円</div>'
-    + '<div style="text-align:right;color:var(--gold)">' + fmt(Math.round(total.cost * 1.1)) + '円</div>'
-    + '<div style="text-align:right">' + fmt(totalInvoice) + '円</div>'
-    + '<div style="text-align:right">' + fmt(Math.round(totalInvoice * 1.1)) + '円</div><div></div>';
+    + '<div style="text-align:right;color:var(--gold)">' + fmt(total.cost) + '円</div><div></div>';
   body.appendChild(totRow);
 }
 
@@ -3477,16 +3318,11 @@ function renderMetalTrend(body) {
 }
 
 // ==================== 地金購入記録 ====================
-// 削除フラグの立っていないレコードのみ
-function activePurchases() {
-  return metalPurchases.filter(p => !p._deleted);
-}
-
 // 指定月・金種のロット単価を取得（使用期間ベース）
 function getLotPrice(metal, monthKey) {
   // metalPurchasesからその月に有効なロットを探す
   // 有効条件：startMonth <= monthKey <= endMonth（endMonthなければ現在まで有効）
-  const lots = activePurchases()
+  const lots = metalPurchases
     .filter(p => p.metal === metal && p.startMonth && p.startMonth <= monthKey)
     .filter(p => !p.endMonth || p.endMonth >= monthKey)
     .sort((a,b) => b.startMonth.localeCompare(a.startMonth));
@@ -3538,7 +3374,7 @@ function renderMetalPurchase(body) {
     <p style="font-size:11px;color:var(--text-sub);margin-top:8px">※ 使用終了月を空欄にすると「現在進行中」扱いになります。持ち地金がなくなったら使用終了月を入力してください。</p>
   </div>`;
 
-  const sorted = activePurchases().slice().sort((a,b) => b.startMonth.localeCompare(a.startMonth));
+  const sorted = metalPurchases.slice().sort((a,b) => b.startMonth.localeCompare(a.startMonth));
   html += `<div style="padding:16px">`;
 
   if (!sorted.length) {
@@ -3583,8 +3419,8 @@ function renderMetalPurchase(body) {
     // 金種別アクティブロット表示
     html += '<div style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">';
     METALS.forEach(mt => {
-      const active = activePurchases().filter(p => p.metal === mt && !p.endMonth);
-      const all = activePurchases().filter(p => p.metal === mt);
+      const active = metalPurchases.filter(p => p.metal === mt && !p.endMonth);
+      const all = metalPurchases.filter(p => p.metal === mt);
       if (!all.length) return;
       const activePrice = active.length ? active[0].price : null;
       html += `<div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:12px;${active.length?'border-left:3px solid var(--success)':''}">
@@ -3627,13 +3463,13 @@ function addMetalPurchase() {
   if (_editingPurchaseIdx !== null) {
     // 編集モード：既存レコードを更新
     const existingId = metalPurchases[_editingPurchaseIdx].id;
-    metalPurchases[_editingPurchaseIdx] = { metal, grams, price, startMonth, endMonth, month, note, id: existingId, _modifiedAt: new Date().toISOString() };
+    metalPurchases[_editingPurchaseIdx] = { metal, grams, price, startMonth, endMonth, month, note, id: existingId };
     _editingPurchaseIdx = null;
     document.getElementById('purchSubmitBtn').textContent = '追加';
     document.getElementById('purchSubmitBtn').style.background = 'var(--accent)';
     resetPurchaseForm();
   } else {
-    metalPurchases.push({ metal, grams, price, startMonth, endMonth, month, note, id: Date.now(), _modifiedAt: new Date().toISOString() });
+    metalPurchases.push({ metal, grams, price, startMonth, endMonth, month, note, id: Date.now() });
   }
 
   metalPurchases.sort((a,b) => b.startMonth.localeCompare(a.startMonth));
@@ -3677,7 +3513,6 @@ function endMetalLot(idx) {
   const endMonth = prompt('使用終了月を入力してください（例：2026-03）', thisMonth);
   if (!endMonth) return;
   metalPurchases[idx].endMonth = endMonth;
-  metalPurchases[idx]._modifiedAt = new Date().toISOString();
   localStorage.setItem('saka_metal_purchases', JSON.stringify(metalPurchases));
   markSettingsUpdated();
   renderReport();
@@ -3685,8 +3520,7 @@ function endMetalLot(idx) {
 
 function deleteMetalPurchase(idx) {
   if (!confirm('この購入記録を削除しますか？')) return;
-  metalPurchases[idx]._deleted = true;
-  metalPurchases[idx]._modifiedAt = new Date().toISOString();
+  metalPurchases.splice(idx, 1);
   localStorage.setItem('saka_metal_purchases', JSON.stringify(metalPurchases));
   markSettingsUpdated();
   renderReport();
@@ -4272,7 +4106,7 @@ function toggleSlip(el) {
 // 初期化
 updateKeyStatus();
 if (!localStorage.getItem('saka_api_key')) showKeyModal();
-if (localStorage.getItem('saka_cloud_enabled') === '1') ensureSignedIn().then(() => {
+if (localStorage.getItem('saka_cloud_enabled') === '1') {
   _firebaseEnabled = true;
   // 設定データ（地金単価・購入記録・エイリアス等）の同期
   syncSettingsFromCloud().then(() => {
@@ -4300,20 +4134,9 @@ if (localStorage.getItem('saka_cloud_enabled') === '1') ensureSignedIn().then(()
       }
     }
   });
-});
+}
 renderHistory();
 renderReport();
 </script>
-<!-- Googleログイン画面（Firebase Authentication） -->
-<div id="googleLoginScreen" style="display:none;position:fixed;inset:0;z-index:10000;background:var(--accent);align-items:center;justify-content:center;padding:20px;">
-  <div style="background:#fff;border-radius:14px;padding:36px 30px;max-width:360px;width:100%;text-align:center;">
-    <div style="font-size:18px;font-weight:600;margin-bottom:6px;">SAKA 納品書読み取りツール</div>
-    <div style="font-size:28px;margin:14px 0;">🔐</div>
-    <p style="font-size:13px;margin-bottom:16px;">クラウドのデータを使うには<br>Googleアカウントでログインしてください</p>
-    <div id="googleLoginError" style="display:none;font-size:12px;color:#C25C5C;margin-bottom:12px;"></div>
-    <button onclick="googleLogin()" style="width:100%;padding:12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer;">Googleでログイン</button>
-    <button id="googleSwitchBtn" onclick="googleLogout(true)" style="display:none;width:100%;margin-top:10px;padding:10px;border:1px solid #ccc;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;">別のアカウントでログイン</button>
-  </div>
-</div>
 </body>
 </html>
