@@ -638,23 +638,38 @@
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
     <h3>⚠️ 未登録の金種</h3>
-    <p id="modalDesc">납품書に登録されていない地金表記が検出されました。<br>型番末尾のコードを入力してください。</p>
-    <input type="text" id="modalInput" placeholder="例：-10P（ピンクゴールドK10の場合）">
+    <p id="modalDesc">納品書に登録されていない地金表記が検出されました。<br>型番末尾のコードを選んでください。</p>
+    <select id="modalSelect" onchange="onMetalSelectChange()" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:3px;font-family:inherit;font-size:13px;margin-bottom:8px;background:var(--bg);color:var(--text)"></select>
+    <input type="text" id="modalInput" placeholder="例：-10P（ピンクゴールドK10の場合）" style="display:none">
     <label><input type="checkbox" id="modalSave"> 次回から自動変換する（変換テーブルに追加）</label>
     <div class="btn-row" style="margin-top:0">
       <button class="btn btn-secondary" onclick="closeModal(null)">スキップ</button>
-      <button class="btn btn-primary" onclick="closeModal(document.getElementById('modalInput').value)">確定</button>
+      <button class="btn btn-primary" onclick="closeModal(getMetalModalValue())">確定</button>
     </div>
   </div>
 </div>
 
 <!-- 型番エイリアスモーダル -->
 <div id="aliasModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:201">
-  <div style="background:var(--surface);border-radius:6px;padding:28px 32px;width:460px;max-width:90vw">
+  <div style="background:var(--surface);border-radius:6px;padding:24px 28px;width:680px;max-width:94vw;max-height:92vh;overflow-y:auto">
     <h3 style="font-family:'EB Garamond',serif;font-size:17px;font-weight:400;margin:0 0 10px">⚠ 未登録の型番</h3>
-    <p style="color:var(--text-sub);font-size:12px;line-height:1.7;margin:0 0 6px">工場表記：<strong id="aliasModalRaw" style="color:var(--text);background:var(--bg);padding:2px 8px;border-radius:2px"></strong></p>
-    <p style="color:var(--text-sub);font-size:12px;margin:0 0 12px">SAKAの型番（金種末尾なし）を入力してください。</p>
+    <p style="color:var(--text-sub);font-size:12px;line-height:1.7;margin:0 0 8px">工場表記：<strong id="aliasModalRaw" style="color:var(--text);background:var(--bg);padding:2px 8px;border-radius:2px"></strong></p>
+    <div style="font-size:11px;color:var(--text-sub);margin:0 0 4px">納品書のまわりの行（黄色がこの行）</div>
+    <div id="aliasModalCtx" style="overflow-x:auto;margin-bottom:12px"></div>
+    <div id="aliasMergeBox" style="display:none;background:#eef6ee;border:1px solid #b7d7b9;border-radius:4px;padding:10px 12px;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:500;margin-bottom:6px">🔗 上の商品にまとめる（地金・ルースはふつう、すぐ上の商品のものです）</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="aliasMergeTarget" onchange="updateAliasMergeNote()" style="flex:1;min-width:200px;padding:7px 10px;border:1px solid var(--border);border-radius:3px;font-family:inherit;font-size:12px;background:#fff;color:var(--text)"></select>
+        <button id="aliasMergeBtn" class="btn btn-primary" onclick="mergeFromAliasModal()" style="white-space:nowrap">この商品にまとめる</button>
+      </div>
+      <div id="aliasMergeNote" style="font-size:11px;color:var(--text-sub);margin-top:6px;line-height:1.6"></div>
+    </div>
+    <p style="color:var(--text-sub);font-size:12px;margin:0 0 6px">または、SAKAの型番（金種末尾なし）を入力してください。</p>
     <input type="text" id="aliasModalInput" placeholder="例：018-R2LO" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:3px;font-size:13px;margin-bottom:8px;font-family:inherit;background:var(--bg);color:var(--text)">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-size:12px;color:var(--text-sub);white-space:nowrap">金種</span>
+      <select id="aliasMetalSel" style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:3px;font-family:inherit;font-size:12px;background:var(--bg);color:var(--text)"></select>
+    </div>
     <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-sub);margin-bottom:8px;cursor:pointer">
       <input type="checkbox" id="aliasModalSave"> 次回から自動変換する（エイリアステーブルに追加）
     </label>
@@ -1468,14 +1483,15 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function buildRows(data) {
   const rows = [];
+  await prepareItems(data);
   for (const item of data.items) {
     const rawSizes = item.sizes && item.sizes.length > 0 ? item.sizes : [];
     const qty = item.qty || 1;
     const sizes = rawSizes.length > 0 ? rawSizes : Array(qty).fill(null);
     const perSize = sizes.length;
 
-    let metalSuffix = await resolveMetal(item.metal_type);
-    const aliasResult = await resolveAlias(item.model || '');
+    let metalSuffix = await resolveMetal(item.metal_type, item);
+    const aliasResult = item._alias || await resolveAlias(item.model || '');
     const resolvedModel = typeof aliasResult === 'string' ? aliasResult : aliasResult.model;
     const isCorrection = typeof aliasResult === 'object' ? aliasResult.isCorrection : false;
     const rawSakaModel = resolvedModel + metalSuffix;
@@ -1594,6 +1610,7 @@ async function buildRows(data) {
         factoryModel: (isCorrection || false) ? (item.model || '') : '',
         repairNote: item.repair_note || '',
         note: item.note || '',
+        mergedFrom: item._mergedFrom || [],
         metalConflict: hasMetalConflict(sakaModel)
       });
     }
@@ -1669,6 +1686,13 @@ async function callClaudeAPI(base64, isPDF, mimeType) {
   metal_grams_total/display/costはnullのままでよい（JS側でper_unit×個数を計算する）
 - 「@」記号がない場合（グラム数が1個分のみ記載、または合計値がそのまま記載されている場合）は従来通りmetal_grams_display/costに記録する
 - ルースの行は直前の商品に紐付けてloose_stonesに追加する
+【地金行・ルース行の紐付け・最重要】
+- この工場の納品書は「商品の行（型番・サイズ）」のすぐ下に、その商品の「地金 SV925 ◯g」行や「ルース DIA ◯ct」行が続く形式である
+- 「地金」「ルース」で始まる行は、必ずその直前（すぐ上）にある商品行のものとして、その商品のitemに入れる。「地金」「ルース」をmodelにした独立したitemは絶対に作らない
+- 地金行は1つ下の商品のものではない。上下を取り違えて、次の商品に地金を入れないこと（例：「21-Ba クリアメッキ」の下の「地金 SV925 38.63g」は21-Baのもの。その下の「018-R #13」には入れない）
+- 1つの商品の下に地金行が複数ある場合は、その商品のサイズ数と合わせてmetal_per_sizeに入れる
+- 商品行の下に地金行がない商品は、地金なしとしてよい（次の商品の地金行を流用しない）
+- 備考欄（CD32-R-65など）は商品行に書かれる。同じ備考の行は同じ商品のもの
 - 「パーツ」「ポスト」「シリコンキャッチ」「金具」「アジャスター」「チェーン」など、商品本体に取り付ける付属パーツの行は、直前の商品に紐付けてattached_partsに追加する（ルースとは別管理）
 - パーツ行に「×3」のような数量表記がある場合、qtyにその数値を入れ、unit_amountには1個あたりの金額（金額欄÷数量）を入れる。数量表記がなければqty=1、unit_amount=金額欄の値
 - ルースはダイヤ（DIA）に限らず、サファイア・ルビー・エメラルド等すべての色石を含む。「ルース」行は石の種類名（グリーンサファイア等）・サイズ（mm）・個数（Pc）をdescにそのまま記録する
@@ -1759,6 +1783,9 @@ async function renderResult(data) {
   const tbody = document.getElementById('productsBody');
   tbody.innerHTML = '';
 
+  // 地金・ルースだけの行を上の商品にまとめ、型番を確認する
+  await prepareItems(data);
+
   // 展開処理（サイズ別に1レコードずつ）
   const rows = [];
   for (const item of data.items) {
@@ -1770,9 +1797,9 @@ async function renderResult(data) {
     const perSize = sizes.length;
 
     // 金種変換
-    let metalSuffix = await resolveMetal(item.metal_type);
+    let metalSuffix = await resolveMetal(item.metal_type, item);
     // 型番エイリアス解決（工場表記→SAKA型番）
-    const aliasResult = await resolveAlias(item.model || '');
+    const aliasResult = item._alias || await resolveAlias(item.model || '');
     const resolvedModel = typeof aliasResult === 'string' ? aliasResult : aliasResult.model;
     const isCorrection = typeof aliasResult === 'object' ? aliasResult.isCorrection : false;
     const rawSakaModel = resolvedModel + metalSuffix;
@@ -1899,6 +1926,7 @@ async function renderResult(data) {
         factoryModel: (isCorrection || false) ? (item.model || '') : '',
         repairNote: item.repair_note || '',
         note: item.note || '',
+        mergedFrom: item._mergedFrom || [],
         metalConflict: hasMetalConflict(sakaModel)
       });
     }
@@ -2071,6 +2099,7 @@ function buildRowTr(row, i) {
     <td style="white-space:nowrap">
       <input class="td-input" value="${row.sakaModel}" oninput="updateRow(${i},'sakaModel',this.value)" style="width:100%">
       ${correctionBadge}
+      ${(row.mergedFrom && row.mergedFrom.length) ? `<span style="display:inline-block;padding:1px 6px;border-radius:2px;font-size:9px;background:#eef6ee;color:#2d6a4f;font-weight:500;margin-left:2px;cursor:help" title="下の行をこの商品にまとめました：${escHtml(row.mergedFrom.join(' / '))}">🔗まとめた</span>` : ''}
       ${row.metalConflict ? '<span style="display:inline-block;padding:1px 5px;border-radius:2px;font-size:9px;background:#fff3cd;color:#856404;font-weight:500;margin-left:2px" title="金種が重複しています">⚠金種重複</span>' : ''}
     </td>
     <td><input class="td-input" style="width:90%" value="${row.size||''}" oninput="updateRow(${i},'size',this.value)"></td>
@@ -2225,8 +2254,155 @@ function updateTotals() {
   document.getElementById('totalCost').innerHTML = `${fmt(totalCost)}<span>円</span>`;
 }
 
+// ==================== 地金・ルースの行を上の商品にまとめる ====================
+// コネクトデスクの納品書は「商品の行」のすぐ下に「地金 SV925 ◯g」「ルース DIA ◯ct」の行が付く。
+// AI がまとめそこねて別の商品として出したものを、読み取り後にすぐ上の商品へまとめ直す。
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 地金だけの行＝'metal'、ルースだけの行＝'loose'、ふつうの商品＝null
+function orphanKind(item) {
+  const m = (item && item.model || '').trim();
+  if (/^地金/.test(m)) return 'metal';
+  if (/^(ルース|ﾙｰｽ)/.test(m)) return 'loose';
+  return null;
+}
+
+function hasMetalData(it) {
+  return (it.metal_amount || 0) > 0 || (it.metal_grams_cost || 0) > 0 || (it.metal_grams_display || 0) > 0
+    || (it.metal_grams_total || 0) > 0 || (it.metal_grams_per_unit || 0) > 0
+    || (Array.isArray(it.metal_per_size) && it.metal_per_size.length > 0);
+}
+
+function itemGramsText(it) {
+  if (Array.isArray(it.metal_per_size) && it.metal_per_size.length) {
+    return it.metal_per_size.map(p => (p.grams_display || p.grams_cost || p.grams || 0) + 'g').join(' / ');
+  }
+  if (it.metal_grams_per_unit) return '@' + it.metal_grams_per_unit + 'g';
+  const g = it.metal_grams_display || it.metal_grams_cost || it.metal_grams_total || 0;
+  return g ? g + 'g' : '';
+}
+
+// 地金行の金額（AI が製作費の欄に入れてしまった場合も拾う）
+function orphanMetalAmount(o) {
+  if ((o.metal_amount || 0) > 0) return o.metal_amount;
+  if ((o.making_total || 0) > 0) return o.making_total;
+  return (o.making_unit || 0) * (o.qty || 1);
+}
+
+const METAL_FIELDS = ['metal_grams_display','metal_grams_cost','metal_grams_total','metal_grams_per_unit','metal_per_size','metal_amount'];
+
+function moveMetal(from, to) {
+  METAL_FIELDS.forEach(k => { to[k] = from[k] !== undefined ? from[k] : null; });
+  if (from.metal_type) to.metal_type = from.metal_type;
+  METAL_FIELDS.forEach(k => { from[k] = (k === 'metal_per_size') ? [] : null; });
+}
+
+function itemLabel(it) {
+  return [it.model || '（型番なし）', (it.sizes || []).join(' '), it.metal_type || ''].filter(Boolean).join(' ');
+}
+
+// o（地金・ルースの行）を t（商品）にまとめる。kind: 'metal' / 'loose'
+function mergeItemInto(t, o, kind) {
+  const label = [o.model || '', o.metal_type || '', itemGramsText(o)].filter(Boolean).join(' ').trim();
+  if (kind === 'metal') {
+    const amount = orphanMetalAmount(o);
+    t.metal_grams_display = o.metal_grams_display || null;
+    t.metal_grams_cost = o.metal_grams_cost || null;
+    t.metal_grams_total = o.metal_grams_total || null;
+    t.metal_grams_per_unit = o.metal_grams_per_unit || null;
+    t.metal_per_size = Array.isArray(o.metal_per_size) ? o.metal_per_size : [];
+    t.metal_amount = amount || 0;
+    if (o.metal_type) t.metal_type = o.metal_type;
+  } else {
+    const stones = Array.isArray(o.loose_stones) ? o.loose_stones.filter(Boolean) : [];
+    if (stones.length) {
+      t.loose_stones = (t.loose_stones || []).concat(stones);
+    } else {
+      const amount = (o.making_total || 0) || (o.making_unit || 0) * (o.qty || 1) || (o.metal_amount || 0);
+      const desc = (o.model || '').replace(/^(ルース|ﾙｰｽ)\s*/, '').trim() || 'ルース';
+      if (amount > 0) t.loose_stones = (t.loose_stones || []).concat([{ desc, amount }]);
+    }
+    t._gotLoose = true;
+  }
+  if (Array.isArray(o.attached_parts) && o.attached_parts.length) {
+    t.attached_parts = (t.attached_parts || []).concat(o.attached_parts);
+  }
+  t._mergedFrom = (t._mergedFrom || []).concat([label || (kind === 'metal' ? '地金' : 'ルース')]);
+  o._mergedAway = true;
+}
+
+// 上にある商品の候補（近い順、地金・ルースだけの行やまとめ済みの行は飛ばす）
+function mergeCandidates(items, idx, max) {
+  const out = [];
+  for (let j = idx - 1; j >= 0 && out.length < (max || 4); j--) {
+    const it = items[j];
+    if (it._mergedAway || orphanKind(it)) continue;
+    out.push(j);
+  }
+  return out;
+}
+
+// 自動でまとめてよい相手を探す。迷うときは -1（画面で本人に聞く）
+function findAutoTarget(items, idx, kind) {
+  const o = items[idx];
+  const cands = mergeCandidates(items, idx, 4);
+  if (!cands.length) return -1;
+  const ok = j => kind === 'metal' ? !hasMetalData(items[j]) : true;
+  const note = (o.note || '').trim();
+  if (note) {
+    const same = cands.filter(j => (items[j].note || '').trim() === note);
+    if (same.length) {
+      if (kind === 'loose') return same.find(j => !items[j]._gotLoose) ?? same[0];
+      return same.find(ok) ?? -1;
+    }
+    const nearNote = (items[cands[0]].note || '').trim();
+    if (nearNote && nearNote !== note) return -1;
+  }
+  return ok(cands[0]) ? cands[0] : -1;
+}
+
+// 読み取り結果（1伝票分）を行に展開する前に呼ぶ：自動まとめ → 型番の確認
+async function prepareItems(data) {
+  if (!data || !Array.isArray(data.items) || data._prepared) return;
+  const items = data.items;
+
+  // ① 地金・ルースだけの行を自動でまとめる
+  for (let i = 0; i < items.length; i++) {
+    const kind = orphanKind(items[i]);
+    if (!kind) continue;
+    const t = findAutoTarget(items, i, kind);
+    if (t >= 0) mergeItemInto(items[t], items[i], kind);
+  }
+
+  // ② 型番を確認（登録のない型番は画面で聞く。まわりの行も見せる）
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it._mergedAway) continue;
+    const res = await resolveAlias(it.model || '', { items, idx: i });
+    if (res && res.mergeTo !== undefined) {
+      const t = items[res.mergeTo];
+      const kind = res.kind;
+      if (kind === 'metal' && hasMetalData(t)) {
+        // 読み取りのずれ：t に入っている地金をさらに上の商品へ移してから入れる
+        if (res.shiftTo !== undefined && res.shiftTo >= 0) {
+          moveMetal(t, items[res.shiftTo]);
+          items[res.shiftTo]._mergedFrom = (items[res.shiftTo]._mergedFrom || []).concat(['地金（ずれを直した）']);
+        }
+      }
+      mergeItemInto(t, it, kind);
+      continue;
+    }
+    it._alias = res;
+  }
+
+  data.items = items.filter(it => !it._mergedAway);
+  data._prepared = true;
+}
+
 // ==================== 金種解決（モーダル） ====================
-async function resolveAlias(rawModel) {
+async function resolveAlias(rawModel, ctx) {
   if (!rawModel) return rawModel;
   const normalized = rawModel.trim();
 
@@ -2249,22 +2425,155 @@ async function resolveAlias(rawModel) {
   const repairKw = ['サイズ直し','修理','メッキ','仕上げ','クリアのみ','返却','リフォーム','磨き','洗浄','新品'];
   if (repairKw.some(kw => normalized.includes(kw))) return { model: normalized, isCorrection: false };
 
-  // 未登録 → アラート
+  // 未登録 → 画面で聞く
   return new Promise((resolve) => {
-    aliasModalResolve = (sakaModel, save) => {
-      if (save && sakaModel) {
-        aliasTable[normalized] = sakaModel;
+    aliasModalCtx = ctx || null;
+    _aliasPromiseResolve = resolve;
+    aliasModalResolve =(sakaModel, save, isCorrection) => {
+      const model = (sakaModel || '').trim();
+      if (save && model) {
+        aliasTable[normalized] = isCorrection ? { target: model, isCorrection: true } : model;
         localStorage.setItem('saka_alias_table', JSON.stringify(aliasTable));
         markSettingsUpdated();
       }
-      resolve(sakaModel || rawModel);
+      // 金種のプルダウン
+      const metalSel = document.getElementById('aliasMetalSel').value;
+      if (ctx && ctx.items && ctx.items[ctx.idx] && metalSel !== '__keep__') {
+        ctx.items[ctx.idx].metal_type = metalSel || null;
+      }
+      resolve({ model: model || rawModel, isCorrection: !!(model && isCorrection) });
     };
     document.getElementById('aliasModalRaw').textContent = normalized;
     document.getElementById('aliasModalInput').value = '';
+    document.getElementById('aliasModalSave').checked = false;
+    document.getElementById('aliasModalIsCorrection').checked = false;
+    renderAliasModalContext(ctx);
     document.getElementById('aliasModalOverlay').style.display = 'flex';
   });
 }
 let aliasModalResolve = null;
+let aliasModalCtx = null;
+
+// まわりの行の表・まとめる先・金種のプルダウンを作る
+function renderAliasModalContext(ctx) {
+  const box = document.getElementById('aliasModalCtx');
+  const mergeBox = document.getElementById('aliasMergeBox');
+  const metalSel = document.getElementById('aliasMetalSel');
+  const items = ctx && ctx.items;
+  const idx = ctx ? ctx.idx : -1;
+
+  // 金種のプルダウン（この納品書で読み取れた金種）
+  const cur = items && items[idx] ? (items[idx].metal_type || '') : '';
+  const found = items ? [...new Set(items.map(it => (it.metal_type || '').trim()).filter(Boolean))] : [];
+  const known = Object.keys(metalTable || {});
+  const opts = [...new Set([...found, ...known])];
+  metalSel.innerHTML = '<option value="__keep__">読み取りのまま（' + escHtml(cur || 'なし') + '）</option>'
+    + opts.map(m => '<option value="' + escHtml(m) + '">' + escHtml(m) + (found.includes(m) ? '（この納品書にあり）' : '') + '</option>').join('')
+    + '<option value="">金種なし</option>';
+  metalSel.value = '__keep__';
+
+  if (!items || idx < 0) { box.innerHTML = ''; mergeBox.style.display = 'none'; return; }
+
+  // まわりの行の表（上3行・この行・下2行）
+  const kind = orphanKind(items[idx]) || ((items[idx].loose_stones || []).length && !hasMetalData(items[idx]) ? 'loose' : 'metal');
+  const cands = mergeCandidates(items, idx, 3);
+  const suggested = cands.length ? (findAutoTarget(items, idx, kind) >= 0 ? findAutoTarget(items, idx, kind) : cands[0]) : -1;
+  const show = [];
+  for (let j = Math.max(0, idx - 3); j <= Math.min(items.length - 1, idx + 2); j++) {
+    if (items[j]._mergedAway) continue;
+    show.push(j);
+  }
+  const th = 'padding:5px 7px;text-align:left;font-size:10px;color:var(--text-sub);border-bottom:1px solid var(--border);white-space:nowrap';
+  const td = 'padding:5px 7px;font-size:11px;border-bottom:1px solid var(--border-light, #eee);white-space:nowrap';
+  let html = '<table style="width:100%;border-collapse:collapse"><thead><tr>'
+    + ['', '型番', 'サイズ', '金種', 'グラム', '製作費', '地金代', 'ルース', '備考'].map(h => '<th style="' + th + '">' + h + '</th>').join('')
+    + '</tr></thead><tbody>';
+  show.forEach(j => {
+    const it = items[j];
+    const loose = (it.loose_stones || []).map(l => (l.desc || '') + (l.amount ? ' ' + fmt(l.amount) + '円' : '')).join(' / ');
+    const bg = j === idx ? 'background:#fff3cd' : (j === suggested ? 'background:#eef6ee' : '');
+    const mark = j === idx ? 'この行' : (j === suggested ? '↑これかも' : (j < idx ? '上' : '下'));
+    html += '<tr style="' + bg + '">'
+      + '<td style="' + td + ';color:var(--text-sub);font-size:10px">' + mark + '</td>'
+      + '<td style="' + td + ';font-weight:500">' + escHtml(it.model || '') + '</td>'
+      + '<td style="' + td + '">' + escHtml((it.sizes || []).join(' ')) + '</td>'
+      + '<td style="' + td + '">' + escHtml(it.metal_type || '') + '</td>'
+      + '<td style="' + td + '">' + escHtml(itemGramsText(it)) + '</td>'
+      + '<td style="' + td + ';text-align:right">' + (it.making_unit ? fmt(it.making_unit) : '') + '</td>'
+      + '<td style="' + td + ';text-align:right">' + (it.metal_amount ? fmt(it.metal_amount) : '') + '</td>'
+      + '<td style="' + td + ';white-space:normal">' + escHtml(loose) + '</td>'
+      + '<td style="' + td + ';color:var(--text-sub)">' + escHtml(it.note || '') + '</td>'
+      + '</tr>';
+  });
+  html += '</tbody></table>';
+  box.innerHTML = html;
+
+  // まとめる先のプルダウン
+  if (!cands.length) { mergeBox.style.display = 'none'; return; }
+  const sel = document.getElementById('aliasMergeTarget');
+  sel.innerHTML = cands.map(j => '<option value="' + j + '">' + escHtml(itemLabel(items[j])) + (items[j].note ? '（' + escHtml(items[j].note) + '）' : '') + '</option>').join('');
+  sel.value = String(suggested >= 0 ? suggested : cands[0]);
+  mergeBox.dataset.kind = kind;
+  mergeBox.style.display = 'block';
+  updateAliasMergeNote();
+}
+
+// まとめる先を選んだときの説明（地金がすでに入っている場合の扱い）
+function aliasMergePlan() {
+  const ctx = aliasModalCtx;
+  if (!ctx) return null;
+  const items = ctx.items, idx = ctx.idx;
+  const target = parseInt(document.getElementById('aliasMergeTarget').value, 10);
+  const kind = document.getElementById('aliasMergeBox').dataset.kind || 'metal';
+  const plan = { target, kind, shiftTo: -1, blocked: false, text: '' };
+  const o = items[idx], t = items[target];
+  if (!t) { plan.blocked = true; return plan; }
+  if (kind === 'loose') {
+    plan.text = '石（ルース）を「' + itemLabel(t) + '」の石代に足します。';
+    return plan;
+  }
+  const g = itemGramsText(o) || '0g';
+  if (!hasMetalData(t)) {
+    plan.text = '地金 ' + g + '（' + fmt(orphanMetalAmount(o)) + '円）を「' + itemLabel(t) + '」の地金にします。';
+    return plan;
+  }
+  // すでに地金が入っている → 読み取りのずれの可能性。さらに上の地金なし商品に移す
+  const above = mergeCandidates(items, target, 1)[0];
+  if (above !== undefined && !hasMetalData(items[above])) {
+    plan.shiftTo = above;
+    plan.text = '「' + itemLabel(t) + '」には地金 ' + itemGramsText(t) + ' が入っています。読み取りのずれとみて、その地金は1つ上の「'
+      + itemLabel(items[above]) + '」に移し、この地金 ' + g + ' を「' + itemLabel(t) + '」に入れます。';
+    return plan;
+  }
+  plan.blocked = true;
+  plan.text = '「' + itemLabel(t) + '」にはすでに地金 ' + itemGramsText(t) + ' が入っているので、まとめられません。保存したあとに表で直してください。';
+  return plan;
+}
+
+function updateAliasMergeNote() {
+  const plan = aliasMergePlan();
+  const note = document.getElementById('aliasMergeNote');
+  const btn = document.getElementById('aliasMergeBtn');
+  if (!plan) { note.textContent = ''; return; }
+  note.textContent = plan.text;
+  note.style.color = plan.blocked ? 'var(--danger)' : 'var(--text-sub)';
+  btn.disabled = plan.blocked;
+  btn.style.opacity = plan.blocked ? '0.4' : '1';
+}
+
+function mergeFromAliasModal() {
+  const plan = aliasMergePlan();
+  if (!plan || plan.blocked) return;
+  const ctx = aliasModalCtx;
+  // 金種のプルダウンで選んだものは、まとめる行に反映してから渡す
+  const metalSel = document.getElementById('aliasMetalSel').value;
+  if (metalSel !== '__keep__' && ctx && ctx.items[ctx.idx]) ctx.items[ctx.idx].metal_type = metalSel || null;
+  document.getElementById('aliasModalOverlay').style.display = 'none';
+  aliasModalResolve = null;
+  aliasModalCtx = null;
+  if (_aliasPromiseResolve) { const r = _aliasPromiseResolve; _aliasPromiseResolve = null; r({ mergeTo: plan.target, kind: plan.kind, shiftTo: plan.shiftTo }); }
+}
+let _aliasPromiseResolve = null;
 
 function closeAliasModal(val) {
   document.getElementById('aliasModalOverlay').style.display = 'none';
@@ -2274,18 +2583,23 @@ function closeAliasModal(val) {
     aliasModalResolve(val, save, isCorrection);
     aliasModalResolve = null;
   }
+  _aliasPromiseResolve = null;
+  aliasModalCtx = null;
 }
 
-async function resolveMetal(metalType) {
+// ==================== 金種（型番末尾）の確認 ====================
+const METAL_SUFFIX_LABELS = { '-10': 'K10YG', '-18': 'K18YG', '-PT': 'PT900', '-SV': 'SV925', '-SV-C': 'SV925 クリア' };
+
+async function resolveMetal(metalType, item) {
   if (!metalType) return '';
   // SV925クリア（メッキなし仕上げ）の場合は専用サフィックス
   if (/SV925/i.test(metalType) && /クリア/.test(metalType)) return '-SV-C';
   if (metalTable[metalType]) return metalTable[metalType];
 
-  // 未登録
+  // 未登録 → プルダウンで選ぶ
   return new Promise((resolve) => {
     modalResolve = (val, save) => {
-      const suffix = val || '';
+      const suffix = (val || '').trim();
       if (save && suffix) {
         metalTable[metalType] = suffix;
         localStorage.setItem('saka_metal_table', JSON.stringify(metalTable));
@@ -2293,10 +2607,36 @@ async function resolveMetal(metalType) {
       }
       resolve(suffix);
     };
-    document.getElementById('modalDesc').textContent = `「${metalType}」は変換テーブルに未登録です。型番末尾のコードを入力してください。`;
+    const who = item && item.model ? `（型番：${item.model}${(item.sizes||[]).length ? ' ' + item.sizes.join(' ') : ''}）` : '';
+    document.getElementById('modalDesc').textContent = `「${metalType}」${who}は変換テーブルに未登録です。型番末尾のコードを選んでください。`;
+    const suffixes = [...new Set([...Object.values(metalTable || {}), ...Object.keys(METAL_SUFFIX_LABELS)])].filter(Boolean);
+    const labelOf = s => {
+      const from = Object.entries(metalTable || {}).filter(([, v]) => v === s).map(([k]) => k);
+      return s + '（' + (from.length ? from.join('・') : (METAL_SUFFIX_LABELS[s] || '')) + '）';
+    };
+    // 表記から一番近いものを最初に選んでおく
+    const guess = /K10/i.test(metalType) ? '-10' : /K18/i.test(metalType) ? '-18' : /PT|プラチナ/i.test(metalType) ? '-PT' : /SV|シルバー/i.test(metalType) ? '-SV' : '';
+    const sel = document.getElementById('modalSelect');
+    sel.innerHTML = '<option value="">（選んでください）</option>'
+      + suffixes.map(s => '<option value="' + escHtml(s) + '">' + escHtml(labelOf(s)) + '</option>').join('')
+      + '<option value="__other__">その他（手で入力する）</option>';
+    sel.value = suffixes.includes(guess) ? guess : '';
     document.getElementById('modalInput').value = '';
+    document.getElementById('modalInput').style.display = 'none';
+    document.getElementById('modalSave').checked = false;
     document.getElementById('modalOverlay').classList.add('open');
   });
+}
+
+function onMetalSelectChange() {
+  const other = document.getElementById('modalSelect').value === '__other__';
+  document.getElementById('modalInput').style.display = other ? 'block' : 'none';
+  if (other) document.getElementById('modalInput').focus();
+}
+
+function getMetalModalValue() {
+  const v = document.getElementById('modalSelect').value;
+  return v === '__other__' ? document.getElementById('modalInput').value : v;
 }
 
 function closeModal(val) {
