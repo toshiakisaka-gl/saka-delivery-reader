@@ -1490,7 +1490,7 @@ async function buildRows(data) {
     const sizes = rawSizes.length > 0 ? rawSizes : Array(qty).fill(null);
     const perSize = sizes.length;
 
-    let metalSuffix = await resolveMetal(item.metal_type, item);
+    let metalSuffix = applyClearSuffix(await resolveMetal(item.metal_type, item), item);
     const aliasResult = item._alias || await resolveAlias(item.model || '');
     const resolvedModel = typeof aliasResult === 'string' ? aliasResult : aliasResult.model;
     const isCorrection = typeof aliasResult === 'object' ? aliasResult.isCorrection : false;
@@ -1693,6 +1693,8 @@ async function callClaudeAPI(base64, isPDF, mimeType) {
 - 1つの商品の下に地金行が複数ある場合は、その商品のサイズ数と合わせてmetal_per_sizeに入れる
 - 商品行の下に地金行がない商品は、地金なしとしてよい（次の商品の地金行を流用しない）
 - 備考欄（CD32-R-65など）は商品行に書かれる。同じ備考の行は同じ商品のもの
+【クリアメッキ】
+- 商品行に「クリアメッキ」「ｸﾘｱﾒｯｷ」「クリア」と書かれている商品は、そのitemに "clear_plating": true を入れる（書かれていなければ入れない）。modelには「クリアメッキ」を含めない
 - 「パーツ」「ポスト」「シリコンキャッチ」「金具」「アジャスター」「チェーン」など、商品本体に取り付ける付属パーツの行は、直前の商品に紐付けてattached_partsに追加する（ルースとは別管理）
 - パーツ行に「×3」のような数量表記がある場合、qtyにその数値を入れ、unit_amountには1個あたりの金額（金額欄÷数量）を入れる。数量表記がなければqty=1、unit_amount=金額欄の値
 - ルースはダイヤ（DIA）に限らず、サファイア・ルビー・エメラルド等すべての色石を含む。「ルース」行は石の種類名（グリーンサファイア等）・サイズ（mm）・個数（Pc）をdescにそのまま記録する
@@ -1797,7 +1799,7 @@ async function renderResult(data) {
     const perSize = sizes.length;
 
     // 金種変換
-    let metalSuffix = await resolveMetal(item.metal_type, item);
+    let metalSuffix = applyClearSuffix(await resolveMetal(item.metal_type, item), item);
     // 型番エイリアス解決（工場表記→SAKA型番）
     const aliasResult = item._alias || await resolveAlias(item.model || '');
     const resolvedModel = typeof aliasResult === 'string' ? aliasResult : aliasResult.model;
@@ -2588,6 +2590,16 @@ function closeAliasModal(val) {
 }
 
 // ==================== 金種（型番末尾）の確認 ====================
+// 商品名に「クリアメッキ」とある SV925 の商品は、クリアの SV（-SV-C）にする（2026/11/16 本人が決定）
+function applyClearSuffix(suffix, item) {
+  if (suffix !== '-SV' || !item) return suffix;
+  if ((item.repair_type || '') === 'repair') return suffix;
+  const txt = [item.model, item.metal_type].filter(Boolean).join(' ');
+  if (/クリアのみ/.test(txt)) return suffix;
+  if (item.clear_plating === true || /クリア|ｸﾘｱ/.test(txt)) return '-SV-C';
+  return suffix;
+}
+
 const METAL_SUFFIX_LABELS = { '-10': 'K10YG', '-18': 'K18YG', '-PT': 'PT900', '-SV': 'SV925', '-SV-C': 'SV925 クリア' };
 
 async function resolveMetal(metalType, item) {
