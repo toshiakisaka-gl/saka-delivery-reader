@@ -1334,25 +1334,22 @@ async function processSingle(file) {
   }
 }
 
-async function processPDFByPage(file) {
+// PDF を3ページずつ AI に読んでもらい、納品書の一覧を返す（画面には出さない）
+async function readPDFInvoices(file, onProgress) {
   const { PDFDocument } = PDFLib;
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer);
   const totalPages = pdfDoc.getPageCount();
   const CHUNK = 3; // 3ページずつ処理
-
-  showStatus('loading', `PDFを読み込み中... 全${totalPages}ページ（${Math.ceil(totalPages/CHUNK)}回に分けて処理）`);
-
-  const allInvoices = [];
-  const skippedChunks = [];
   const totalChunks = Math.ceil(totalPages / CHUNK);
+  const invoices = [];
+  const skipped = [];
 
   for (let ci = 0; ci < totalChunks; ci++) {
     const startPage = ci * CHUNK;
     const endPage = Math.min(startPage + CHUNK, totalPages);
     const pageNums = Array.from({length: endPage - startPage}, (_, k) => startPage + k);
-
-    showStatus('loading', `読み取り中... ${ci + 1} / ${totalChunks} （ページ ${startPage + 1}〜${endPage}）`);
+    if (onProgress) onProgress(ci + 1, totalChunks, startPage + 1, endPage);
 
     // 複数ページをまとめた一時PDFを作成
     const chunkDoc = await PDFDocument.create();
@@ -1370,18 +1367,26 @@ async function processPDFByPage(file) {
     const base64 = btoa(binary);
 
     try {
-      const invoices = await callClaudeAPIWithRetry(base64, true, 'application/pdf');
-      allInvoices.push(...invoices);
+      const got = await callClaudeAPIWithRetry(base64, true, 'application/pdf');
+      invoices.push(...got);
     } catch(e) {
+      if (/APIキー/.test(e.message)) throw e;
       console.warn(`チャンク${ci+1}の読み取りエラー:`, e.message);
-      skippedChunks.push(`ページ${startPage+1}〜${endPage}（エラー: ${e.message.slice(0,40)}）`);
+      skipped.push(`ページ${startPage+1}〜${endPage}（エラー: ${e.message.slice(0,40)}）`);
     }
 
     if (ci < totalChunks - 1) await sleep(800);
   }
+  return { invoices, skipped };
+}
+
+async function processPDFByPage(file) {
+  const { invoices: allInvoices, skipped: skippedChunks } = await readPDFInvoices(file, (n, total, from, to) => {
+    showStatus('loading', `読み取り中... ${n} / ${total} （ページ ${from}〜${to}）`);
+  });
 
   if (!allInvoices.length) {
-    showStatus('error', '読み取れる納品書がありませんでした。');
+    showStatus('error', '読み取れる納品書がありませんでした。' + (skippedChunks.length ? `（${skippedChunks.join(' / ')}）` : ''));
     return;
   }
 
@@ -1407,6 +1412,8 @@ async function processFile(file) {
   await processSingle(file);
 }
 
+// ファイルを2つ以上いっしょに入れたとき：全部読んでから、確認の画面にまとめて出す
+// （前は確認なしで履歴に保存していた。2026/11/16 に本人の希望で、必ず確認してから保存する形に）
 async function processBatch(files) {
   document.getElementById('resultSection').style.display = 'none';
   const panel = document.getElementById('queuePanel');
@@ -1416,72 +1423,67 @@ async function processBatch(files) {
   list.innerHTML = '';
 
   // キューアイテム作成
-  const items = files.map((f, i) => {
+  files.forEach((f, i) => {
     const div = document.createElement('div');
     div.id = 'qi-' + i;
     div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 16px;font-size:12px;border-bottom:1px solid var(--border-light)';
-    div.innerHTML = `<span id="qi-icon-${i}" style="font-size:14px">⏳</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span><span id="qi-status-${i}" style="color:var(--text-sub);font-size:11px">待機中</span>`;
+    div.innerHTML = `<span id="qi-icon-${i}" style="font-size:14px">⏳</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.name)}</span><span id="qi-status-${i}" style="color:var(--text-sub);font-size:11px">待機中</span>`;
     list.appendChild(div);
-    return div;
   });
 
-  let done = 0;
-  let savedCount = 0;
-  showStatus('loading', `一括処理中... 0/${files.length}`);
+  const allInvoices = [];
+  const problems = [];
+  showStatus('loading', `読み取り中... 0/${files.length}`);
 
   for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     progress.textContent = `${i+1} / ${files.length}`;
     document.getElementById('qi-icon-' + i).textContent = '🔄';
-    document.getElementById('qi-status-' + i).textContent = '処理中...';
+    document.getElementById('qi-status-' + i).textContent = '読み取り中...';
+    showStatus('loading', `読み取り中... ${i+1}/${files.length}（${file.name}）`);
 
     try {
-      const file = files[i];
-      const base64 = await fileToBase64(file);
-      const isPDF = file.type === 'application/pdf';
-      const invoices = await callClaudeAPIWithRetry(base64, isPDF, file.type);
-
-      // 自動保存（複数納品書を日付でまとめる）
-      const allRows = [];
-      const slipNos = [];
-      for (const inv of invoices) {
-        if (inv.slip_no) slipNos.push(inv.slip_no);
-        const rows = await buildRows(inv);
-        allRows.push(...rows);
+      let invoices, skipped = [];
+      if (file.type === 'application/pdf') {
+        ({ invoices, skipped } = await readPDFInvoices(file));
+      } else {
+        const base64 = await fileToBase64(file);
+        invoices = await callClaudeAPIWithRetry(base64, false, file.type);
       }
-      const dates = [...new Set(invoices.map(inv => inv.date).filter(Boolean))];
-      const entry = {
-        id: Date.now() + i,
-        date: dates.join(' / '),
-        slip_no: slipNos.join(', '),
-        subject: invoices.map(inv => inv.subject).filter(Boolean).join(' / '),
-        rows: allRows,
-        savedAt: new Date().toISOString(),
-        filename: file.name,
-        isMulti: invoices.length > 1
-      };
-      history.unshift(entry);
-      savedCount++;
-
-      document.getElementById('qi-icon-' + i).textContent = '✅';
-      document.getElementById('qi-status-' + i).textContent = `完了 (${allRows.length}点)`;
+      allInvoices.push(...invoices);
+      if (skipped.length) problems.push(`${file.name}：${skipped.join(' / ')}`);
+      document.getElementById('qi-icon-' + i).textContent = skipped.length ? '⚠' : '✅';
+      document.getElementById('qi-status-' + i).textContent = skipped.length
+        ? `${invoices.length}枚（読めないページあり）`
+        : `読み取り完了（${invoices.length}枚）`;
     } catch(e) {
+      problems.push(`${file.name}：${e.message.slice(0, 60)}`);
       document.getElementById('qi-icon-' + i).textContent = '❌';
       document.getElementById('qi-status-' + i).textContent = 'エラー';
       document.getElementById('qi-status-' + i).style.color = 'var(--danger)';
+      if (/APIキー/.test(e.message)) break;
     }
 
     // API制限対策：少し待つ
     if (i < files.length - 1) await sleep(1000);
   }
 
-  localStorage.setItem('saka_delivery_history', JSON.stringify(history));
-  for (const e of history.slice(0, savedCount)) {
-    await saveToFirebase(e);
+  progress.textContent = `読み取り完了 ${files.length - problems.length}/${files.length}`;
+  if (!allInvoices.length) {
+    showStatus('error', '読み取れる納品書がありませんでした。' + (problems.length ? `（${problems.join(' / ')}）` : ''));
+    return;
   }
-  renderHistory();
-  renderReport();
-  showStatus('success', `一括処理完了：${savedCount}/${files.length}件を保存しました。`);
-  progress.textContent = `完了 ${savedCount}/${files.length}`;
+
+  // 確認の画面に出す（保存はまだしない）
+  if (allInvoices.length === 1) await renderResult(allInvoices[0]);
+  else await renderMultiResult(allInvoices);
+
+  const btn = allInvoices.length === 1 ? '確定して保存' : 'まとめて保存';
+  if (problems.length) {
+    showStatus('error', `${files.length}ファイルから${allInvoices.length}枚を読みましたが、読めなかったところがあります。このまま保存しないで、そのファイルをもう一度読み込んでください。（${problems.join(' / ')}）`);
+  } else {
+    showStatus('success', `${files.length}ファイルから${allInvoices.length}枚の納品書を読み取りました。内容を確認して「${btn}」してください。`);
+  }
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
