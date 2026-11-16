@@ -546,6 +546,7 @@
       </div>
 
       <div class="divider"></div>
+      <div id="readCheckBox" style="display:none;border:1px solid;border-radius:4px;padding:10px 14px;font-size:12px;margin-bottom:14px"></div>
 
       <!-- Products Table -->
       <div class="products-container">
@@ -1611,6 +1612,7 @@ async function buildRows(data) {
         repairNote: item.repair_note || '',
         note: item.note || '',
         mergedFrom: item._mergedFrom || [],
+        sourceText: (item._source || []).join(' ／ '),
         metalConflict: hasMetalConflict(sakaModel)
       });
     }
@@ -1627,90 +1629,280 @@ function fileToBase64(file) {
   });
 }
 
+// ==================== 書き写した行（lines）を商品（items）にまとめる ====================
+// AI には表を1行ずつ書き写してもらうだけにして、どの行がどの商品のものかはここで決まったルールで決める（2026/11/16）
+// ルール：「地金」「ルース」「パーツ類」の行は、必ずすぐ上の商品の行のもの。上の行の金種を借りてくることはしない。
+function nz(s) { return String(s == null ? '' : s).normalize('NFKC').replace(/\s+/g, ' ').trim(); }
+function toNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  const n = parseFloat(String(v).normalize('NFKC').replace(/[,円\s¥]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+const LINE_RE_METAL = /(?:^|[\s(])(K\d{1,2}(?:YG|WG|PG|RG|CG)?|PT\d{3}|SV\d{3})(?=$|[\s)])/i;
+const LINE_RE_GRAMS = /(@)?\s*(\d+(?:\.\d+)?)\s*g\b\s*(?:\(\s*(\d+(?:\.\d+)?)\s*g?\s*\))?/i;
+const LINE_REPAIR_KW = ['サイズ直し','修理','メッキ','仕上げ','クリアのみ','返却','リフォーム','磨き','洗浄','新品'];
+const LINE_PART_RE = /(パーツ|ポスト|キャッチ|金具|アジャスター|チェーン|丸カン)/;
+
+function lineKind(t) {
+  if (/^地金/.test(t)) return 'metal';
+  if (/^ルース/.test(t)) return 'loose';
+  if (/^\d{2,3}-/.test(t)) return 'product';
+  if (LINE_PART_RE.test(t)) return 'part';
+  return 'product';
+}
+
+function parseGrams(t) {
+  const m = t.match(LINE_RE_GRAMS);
+  if (!m) return null;
+  const display = parseFloat(m[2]);
+  const cost = m[3] ? parseFloat(m[3]) : display;
+  return { at: !!m[1], display, cost };
+}
+
+function parseMetalType(t) {
+  const m = t.match(LINE_RE_METAL);
+  return m ? m[1].toUpperCase() : null;
+}
+
+function sizeNum(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, '')); return isNaN(n) ? 0 : n; }
+
+function newProductItem(line) {
+  const t = line.text;
+  const startsCode = /^\d{2,3}-/.test(t);
+  const isRepair = LINE_REPAIR_KW.some(k => t.replace(/クリアメッキ/g, '').includes(k));
+  let model = t;
+  let rest = '';
+  if (startsCode && !isRepair) {
+    const first = t.split(' ')[0];
+    model = first.split('#')[0];
+    rest = t.slice(model.length);
+  } else if (startsCode) {
+    rest = t.slice(t.split(' ')[0].split('#')[0].length);
+  }
+  const sizes = [...rest.matchAll(/#\s*(\d+(?:\.\d+)?)/g)].map(m => '#' + m[1])
+    .concat([...rest.matchAll(/(\d+(?:\.\d+)?)\s*号/g)].map(m => '#' + m[1]));
+  const qty = toNum(line.qty) || 1;
+  let sz = sizes.slice().sort((a, b) => sizeNum(a) - sizeNum(b));
+  if (sz.length === 1 && qty > 1) sz = Array(qty).fill(sz[0]);
+  const amount = toNum(line.amount);
+  const unitPrice = toNum(line.unit_price);
+  const item = {
+    model,
+    note: line.note ? nz(line.note) : null,
+    sizes: sz,
+    qty,
+    making_unit: unitPrice !== null ? unitPrice : (amount !== null ? Math.round(amount / qty) : 0),
+    making_total: amount,
+    metal_type: startsCode ? parseMetalType(rest) : parseMetalType(t),
+    metal_per_size: [],
+    metal_grams_per_unit: null, metal_grams_display: null, metal_grams_cost: null, metal_grams_total: null,
+    metal_amount: null,
+    loose_stones: [],
+    attached_parts: [],
+    _source: [t],
+    _no: line.no,
+    _metalLines: []
+  };
+  if (/クリア/.test(t) && !/クリアのみ/.test(t)) item.clear_plating = true;
+  if (isRepair) item.repair_type = 'repair';
+  // 商品の行に直接グラムが書いてある場合（例：011-R #13 K18YG 9.76g(9.99g)）
+  const g = parseGrams(startsCode ? rest : t);
+  if (g && !isRepair) {
+    if (g.at) item.metal_grams_per_unit = g.cost;
+    else { item.metal_grams_display = g.display; item.metal_grams_cost = g.cost; item.metal_grams_total = g.cost; }
+    item.metal_amount = 0;
+  }
+  return item;
+}
+
+function finishMetal(item, checks) {
+  const ml = item._metalLines;
+  delete item._metalLines;
+  if (!ml.length) return;
+  const types = [...new Set(ml.map(m => m.metal).filter(Boolean))];
+  if (types.length > 1) checks.push(`NO.${item._no}「${item.model}」の下の地金の行で、金種が ${types.join('・')} とまざっています`);
+  if (types[0]) item.metal_type = types[0];
+  ml.forEach(m => { if (!m.grams) checks.push(`NO.${m.no}「${m.text}」のグラム数が読み取れません`); });
+
+  const qty = item.qty || 1;
+  item.metal_per_size = [];
+  item.metal_grams_per_unit = null; item.metal_grams_display = null; item.metal_grams_cost = null; item.metal_grams_total = null;
+  if (ml.length > 1 && item.sizes.length === ml.length && ml.every(m => m.grams && !m.grams.at)) {
+    // サイズごとの地金（号数の小さい順に対応）
+    item.metal_per_size = ml.map((m, i) => ({ size: item.sizes[i], grams_display: m.grams.display, grams_cost: m.grams.cost, amount: m.amount || 0 }));
+    item.metal_amount = ml.reduce((s, m) => s + (m.amount || 0), 0);
+    item.metal_grams_total = ml.reduce((s, m) => s + m.grams.cost, 0);
+    return;
+  }
+  if (ml.length === 1) {
+    const m = ml[0];
+    if (m.grams && m.grams.at) item.metal_grams_per_unit = m.grams.cost;
+    else if (m.grams) { item.metal_grams_display = m.grams.display; item.metal_grams_cost = m.grams.cost; item.metal_grams_total = m.grams.cost; }
+    item.metal_amount = m.amount || 0;
+    return;
+  }
+  // 地金の行が複数でサイズ数と合わない → 合計する
+  let gd = 0, gc = 0;
+  ml.forEach(m => {
+    if (!m.grams) return;
+    const mult = m.grams.at ? (m.qty || qty) : 1;
+    gd += m.grams.display * mult; gc += m.grams.cost * mult;
+  });
+  item.metal_grams_display = Math.round(gd * 100) / 100;
+  item.metal_grams_cost = Math.round(gc * 100) / 100;
+  item.metal_grams_total = item.metal_grams_cost;
+  item.metal_amount = ml.reduce((s, m) => s + (m.amount || 0), 0);
+  checks.push(`NO.${item._no}「${item.model}」の下に地金の行が${ml.length}行あり、サイズの数（${item.sizes.length}）と合わないので合計しました`);
+}
+
+function linesToInvoice(inv) {
+  if (!inv || !Array.isArray(inv.lines)) return inv;
+  const checks = [];
+  const lines = inv.lines
+    .map(l => ({ ...l, text: nz(l.text), no: toNum(l.no) }))
+    .filter(l => l.text);
+
+  // ① 1行ずつの答え合わせ（数量 × 単価 ＝ 金額）
+  lines.forEach(l => {
+    const q = toNum(l.qty), u = toNum(l.unit_price), a = toNum(l.amount);
+    if (a === null) checks.push(`NO.${l.no}「${l.text}」の金額が読み取れません`);
+    else if (q !== null && u !== null && Math.abs(q * u - a) > 1) checks.push(`NO.${l.no}「${l.text}」：数量${q} × 単価${fmt(u)} ＝ ${fmt(q * u)}円 ですが、金額は ${fmt(a)}円 です`);
+  });
+  // ② NO が抜けずに続いているか
+  const nos = lines.map(l => l.no).filter(n => n !== null).sort((a, b) => a - b);
+  if (nos.length) {
+    for (let k = 1; k <= nos[nos.length - 1]; k++) if (!nos.includes(k)) checks.push(`NO.${k} の行が見つかりません（読み落としかもしれません）`);
+  }
+  // ③ 全部足すと合計になるか
+  const sum = lines.reduce((s, l) => s + (toNum(l.amount) || 0), 0);
+  const total = toNum(inv.total);
+  if (total !== null && Math.abs(sum - total) > 1) checks.push(`金額を全部足すと ${fmt(sum)}円 ですが、納品書の合計は ${fmt(total)}円 です（読み落としか読みまちがいがあるかもしれません）`);
+
+  // ④ 行を商品にまとめる
+  const items = [];
+  let cur = null;          // すぐ上の商品
+  let lastKind = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const kind = lineKind(l.text);
+    const qty = toNum(l.qty) || 1;
+    const amount = toNum(l.amount) || 0;
+
+    if (kind === 'product') {
+      if (cur) finishMetal(cur, checks);
+      cur = newProductItem(l);
+      items.push(cur);
+    } else if (!cur) {
+      // 上に商品がない地金・ルース・パーツ → そのまま1件にして知らせる
+      const it = newProductItem(l);
+      it.model = l.text;
+      items.push(it);
+      checks.push(`NO.${l.no}「${l.text}」の上に商品の行がないので、まとめられませんでした`);
+      cur = null;
+    } else if (kind === 'metal') {
+      cur._metalLines.push({ no: l.no, text: l.text, metal: parseMetalType(l.text), grams: parseGrams(l.text), amount, qty });
+      cur._source.push(l.text);
+    } else if (kind === 'loose') {
+      const desc = l.text.replace(/^ルース\s*/, '').trim() || 'ルース';
+      // 同じ型番の商品が続けて並び、その下に石がまとめて書かれている場合（例：026-RSD #13、026-RSD #12、ルース ×2）は1本に1個ずつ分ける
+      const run = [];
+      for (let j = items.length - 1; j >= 0 && run.length < qty; j--) {
+        const it = items[j];
+        if (it.model !== cur.model || it.loose_stones.length || it.repair_type) break;
+        run.push(it);
+      }
+      if (qty > 1 && run.length === qty && lastKind === 'product') {
+        const per = Math.round(amount / qty);
+        run.forEach(it => { it.loose_stones.push({ desc, amount: per }); it._source.push(l.text + '（1個分）'); });
+        checks.push(`ℹ NO.${l.no}「${l.text}」（${qty}個・${fmt(amount)}円）を、上の ${cur.model} ${qty}本に1個ずつ分けました`);
+      } else {
+        cur.loose_stones.push({ desc: desc + (qty > 1 ? ` ×${qty}` : ''), amount });
+        cur._source.push(l.text);
+      }
+    } else if (kind === 'part') {
+      const mx = l.text.match(/[×xX]\s*(\d+)/);
+      const pq = mx ? parseInt(mx[1], 10) : qty;
+      cur.attached_parts.push({ desc: l.text, qty: pq, unit_amount: pq ? amount / pq : amount });
+      cur._source.push(l.text);
+    }
+    lastKind = kind;
+  }
+  if (cur) finishMetal(cur, checks);
+  items.forEach(it => { if (it._metalLines) finishMetal(it, checks); });
+
+  // ⑤ 金種が見つからない商品
+  items.forEach(it => {
+    if (!it.metal_type && !it.repair_type) checks.push(`NO.${it._no}「${it.model}」の金種が見つかりません（上の行からは借りてきません。表で確認してください）`);
+  });
+
+  const out = { ...inv, items, _checks: checks, _lines: lines };
+  delete out.lines;
+  return out;
+}
+
+// 読み取りの答え合わせを画面に出す
+function showReadChecks(invoices) {
+  const box = document.getElementById('readCheckBox');
+  if (!box) return;
+  const list = (invoices || []).filter(Boolean);
+  const warns = [], infos = [];
+  let any = false;
+  list.forEach(inv => {
+    if (!Array.isArray(inv._checks)) return;
+    any = true;
+    const label = list.length > 1 ? `伝票 ${inv.slip_no || ''}：` : '';
+    inv._checks.forEach(c => {
+      if (/^ℹ /.test(c)) infos.push('<li>' + escHtml(label + c.replace(/^ℹ /, '')) + '</li>');
+      else warns.push('<li>' + escHtml(label + c) + '</li>');
+    });
+  });
+  if (!any) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'block';
+  const infoHtml = infos.length ? '<div style="margin-top:6px;color:var(--text-sub)">ℹ アプリが行ったこと：<ul style="margin:2px 0 0;padding-left:18px;line-height:1.7">' + infos.join('') + '</ul></div>' : '';
+  if (!warns.length) {
+    box.style.background = '#eef6ee'; box.style.borderColor = '#b7d7b9'; box.style.color = '#2d6a4f';
+    box.innerHTML = '✅ 答え合わせ OK（数量×単価＝金額、合計、NO の並び、金種がすべてそろっています）' + infoHtml;
+  } else {
+    box.style.background = 'var(--danger-light)'; box.style.borderColor = '#e8b4b4'; box.style.color = 'var(--danger)';
+    box.innerHTML = '<div style="font-weight:500;margin-bottom:4px">⚠ 答え合わせで気になるところがあります。納品書と見くらべてください</div><ul style="margin:0;padding-left:18px;line-height:1.7">' + warns.join('') + '</ul>' + infoHtml;
+  }
+}
+
 // ==================== Claude API ====================
 async function callClaudeAPI(base64, isPDF, mimeType) {
-  const systemPrompt = `あなたは日本の宝飾品工場からの納品書（請求書）を読み取るAIです。
-1つのPDFに複数の納品書が含まれる場合があります。
-以下のルールで厳密にJSONを出力してください。前置きやMarkdownは一切不要です。
+  const systemPrompt = `あなたは日本の宝飾品工場の納品書を「書き写す」係です。
+表の中身を、印字されている通りに1行ずつ書き写してください。
+どの行がどの商品のものかを判断したり、行をまとめたり、内容を補ったりしてはいけません（それは別のプログラムが行います）。
+1つのPDFに複数の納品書が含まれる場合があります。前置きやMarkdownは一切不要で、JSON配列だけを出力してください。
 
-出力形式（複数納品書に対応した配列形式）：
+出力形式：
 [
   {
-    "date": "納品日（例：2022年07月02日）",
-    "slip_no": "伝票NO",
-    "subject": "件名（そのページ内に記載のNo.番号のみ。他ページの番号と連結しない）",
-    "total": 合計金額（税抜き数値）,
-    "items": [
-      {
-        "model": "型番（例：011-RCDA）",
-        "note": "備考欄の内容（顧客名・社内管理番号等。なければnull）",
-        "sizes": ["#11", "#13", "#15"],
-        "qty": 3,
-        "making_unit": 製作費単価,
-        "making_total": 製作費金額合計（納品書に記載の金額欄の値），
-        "metal_type": "地金表記（例：SV925）",
-        "metal_per_size": [
-          {"size": "#11", "grams_display": 6.09, "grams_cost": 6.09, "amount": 713},
-          {"size": "#13", "grams_display": 6.22, "grams_cost": 6.22, "amount": 728},
-          {"size": "#15", "grams_display": 6.33, "grams_cost": 6.33, "amount": 741}
-        ],
-        "metal_grams_per_unit": null,
-        "metal_grams_display": null,
-        "metal_grams_cost": null,
-        "metal_grams_total": null,
-        "metal_amount": null,
-        "loose_stones": [{"desc": "石の種類とサイズ・個数（例：DIA 1.3mm x 9Pc、グリーンサファイア 1.5mm x 22Pc）", "amount": ルース金額}],
-        "attached_parts": [{"desc": "パーツ名（例：パーツポスト+シリコンキャッチ、ベネチアンチェーン K10YG 50cm）", "qty": 数量（×3等の場合は3、なければ1）, "unit_amount": 1個あたりの金額}]
-      }
+    "date": "納品日（例：2026年11月13日）",
+    "slip_no": "伝票NO（例：0000016003）",
+    "subject": "件名欄の内容（例：No.-387）。他のページの番号と連結しない",
+    "total": 合計欄の金額（税抜・カンマなしの数値）,
+    "lines": [
+      { "no": 1, "text": "011-R #13 K18YG 9.76g(9.99g)", "qty": 1, "unit": "個", "unit_price": 3800, "amount": 3800, "note": "CD32-R-20" },
+      { "no": 2, "text": "011-R #16", "qty": 1, "unit": "個", "unit_price": 4700, "amount": 4700, "note": "CD32-R-20" },
+      { "no": 3, "text": "地金 SV925 6.62g", "qty": 1, "unit": "個", "unit_price": 2264, "amount": 2264, "note": null }
     ]
   }
 ]
 
 ルール：
-- 必ず配列形式で返す（納品書が1枚でも配列）
-- 納品書のページごとに1オブジェクトを作る（伝票NOが変わったら別オブジェクト）
-- subjectは各ページの件名欄に記載されている内容のみを記録し、他のページの番号と連結・混在させない
-- 1商品につきitemsを1件作る
-- 同一型番で複数サイズがまとめて記載されている場合（例：#11 #13 #15）、sizesに配列で入れる
-- サイズ展開で地金行が複数ある場合（サイズ数と地金行数が一致する場合）、号数の小さい順に対応しているのでmetal_per_sizeに1件ずつ記録する
-- 地金行が1行のみの場合はmetal_grams_displayとmetal_grams_costとmetal_amountに記録し、metal_per_sizeは空配列にする
-- 商品行自体に金種・グラム数が直接記載され、別途「地金」行が存在しない場合（例：「003-Rs #16 K18YG 2.66g(3.05g)」のみで地金行なし）：
-  その行の単価・金額はmaking_unit/making_totalとして記録する。metal_amountは0、metal_grams_display/metal_grams_costにはグラム数を記録する（地金代は別途推定計算される）
-- グラム数に「3.54g(4.34g)」のような括弧表記がある場合：括弧外=grams_display（商品表示用）、括弧内=grams_cost（消費グラム・原価計算用）
-- 括弧表記がない場合はgrams_displayとgrams_costに同じ値を入れる
-- 金額計算にはgrams_costを使う（消費グラムが実際のコスト）
-- metal_grams_totalは後方互換のためgrams_costの合計値を入れる
-- 地金行に「@」記号がある場合（例：「地金 SV925 @51.8g」「2個」「単価26,211」「金額52,422」）：
-  「@」の値（1個あたりのグラム数）をmetal_grams_per_unitにそのまま入れる（計算・倍数化はしない、印字された数値をそのまま）。
-  metal_amountには金額欄の合計値（52,422）をそのまま入れる。
-  metal_grams_total/display/costはnullのままでよい（JS側でper_unit×個数を計算する）
-- 「@」記号がない場合（グラム数が1個分のみ記載、または合計値がそのまま記載されている場合）は従来通りmetal_grams_display/costに記録する
-- ルースの行は直前の商品に紐付けてloose_stonesに追加する
-【地金行・ルース行の紐付け・最重要】
-- この工場の納品書は「商品の行（型番・サイズ）」のすぐ下に、その商品の「地金 SV925 ◯g」行や「ルース DIA ◯ct」行が続く形式である
-- 「地金」「ルース」で始まる行は、必ずその直前（すぐ上）にある商品行のものとして、その商品のitemに入れる。「地金」「ルース」をmodelにした独立したitemは絶対に作らない
-- 地金行は1つ下の商品のものではない。上下を取り違えて、次の商品に地金を入れないこと（例：「21-Ba クリアメッキ」の下の「地金 SV925 38.63g」は21-Baのもの。その下の「018-R #13」には入れない）
-- 1つの商品の下に地金行が複数ある場合は、その商品のサイズ数と合わせてmetal_per_sizeに入れる
-- 商品行の下に地金行がない商品は、地金なしとしてよい（次の商品の地金行を流用しない）
-- 備考欄（CD32-R-65など）は商品行に書かれる。同じ備考の行は同じ商品のもの
-【クリアメッキ】
-- 商品行に「クリアメッキ」「ｸﾘｱﾒｯｷ」「クリア」と書かれている商品は、そのitemに "clear_plating": true を入れる（書かれていなければ入れない）。modelには「クリアメッキ」を含めない
-- 「パーツ」「ポスト」「シリコンキャッチ」「金具」「アジャスター」「チェーン」など、商品本体に取り付ける付属パーツの行は、直前の商品に紐付けてattached_partsに追加する（ルースとは別管理）
-- パーツ行に「×3」のような数量表記がある場合、qtyにその数値を入れ、unit_amountには1個あたりの金額（金額欄÷数量）を入れる。数量表記がなければqty=1、unit_amount=金額欄の値
-- ルースはダイヤ（DIA）に限らず、サファイア・ルビー・エメラルド等すべての色石を含む。「ルース」行は石の種類名（グリーンサファイア等）・サイズ（mm）・個数（Pc）をdescにそのまま記録する
-- ルースのdescは納品書に印字された文字列をそのまま一字一句転記する（翻訳・言い換え禁止）。「1.5mm x 22Pc」は"1.5mm x 22Pc"のまま、"22本"のように変換してはいけない
-- 金額は税抜き数値のみ（カンマなし整数）
-- グラム数は小数点あり数値（例：3.3）
-- 読み取れない場合はnullを入れる
-【型番の読み取りルール・重要】
-- modelフィールドには商品型番のみを入れる（例：011-RCDA、005-RM、001-R）
-- #番号（サイズ）は型番ではない → sizesフィールドへ
-- K10YG K18YG PT900 SV925 は地金種別であり型番ではない → metal_typeフィールドへ
-- グラム数・括弧・重量は型番ではない
-- 型番に金種・サイズ・グラムを絶対に含めない
-- 型番は印字されている通りに最後まで転記する。途中で切ったり短くしたりしない（例：「011-R3Wing」を「011-R」にしない）
-- チェーン・パーツ類（ベネチアンチェーン・あずきチェーン・ポスト等）はSAKAの型番がないので商品名をそのままmodelに入れる
-- サイズ直し・修理・メッキ・仕上げ等の作業系も商品名をそのままmodelに入れ、repair_type="repair"を付ける`;
+- 納品書（伝票NOが違うもの）ごとに1つのオブジェクトを作る。必ず配列で返す
+- 表のNO欄の1行につき、linesを1件作る。NOが空の行や、何も書かれていない行は飛ばす
+- 1行の中身は、その行に印字されている文字だけを書く。上や下の行の内容を混ぜない、借りてこない
+- text：商品名の欄の文字を、左から右へ一字一句そのまま書き写す（型番・#サイズ・金種・グラム・括弧・「地金」「ルース」「クリアメッキ」などもすべてそのまま）。言い換え・省略・並べ替え・補完をしない。型番を途中で切らない（例：011-R3Wing は 011-R3Wing のまま）
+- 商品名の欄が字下げされていても、textには文字だけを書く
+- qty：数量欄の数値。unit：単位欄の文字（個、ペア など）
+- unit_price：単価欄の数値。amount：金額（税抜）欄の数値。どちらもカンマなしの整数
+- note：備考欄の文字をそのまま。空欄なら null（上の行の備考を書かない）
+- 読み取れない欄は null にする。推測で数字を入れない
+- total は表の下の「合計」欄の数値`;
 
   const contentBlock = isPDF
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
@@ -1730,13 +1922,14 @@ async function callClaudeAPI(base64, isPDF, mimeType) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
       max_tokens: 8192,
+      temperature: 0,
       system: systemPrompt,
       messages: [
         {
           role: 'user',
           content: [
             contentBlock,
-            { type: 'text', text: '上記の納品書を読み取り、指定されたJSON形式で出力してください。前置きや説明文は一切不要です。JSON配列のみを出力してください。' }
+            { type: 'text', text: '上記の納品書の表を、1行ずつ印字の通りに書き写し、指定されたJSON形式で出力してください。行をまとめたり補ったりしないでください。前置きや説明文は一切不要です。JSON配列のみを出力してください。' }
           ]
         }
       ]
@@ -1768,7 +1961,8 @@ async function callClaudeAPI(base64, isPDF, mimeType) {
       throw new Error('JSONパースエラー: ' + e.message + ' / 応答冒頭: ' + text.slice(0,80));
     }
   }
-  return Array.isArray(parsed) ? parsed : [parsed];
+  // 書き写した行を、決まったルールで商品にまとめる
+  return (Array.isArray(parsed) ? parsed : [parsed]).map(linesToInvoice);
 }
 
 // ==================== 描画 ====================
@@ -1786,6 +1980,7 @@ async function renderResult(data) {
   const tbody = document.getElementById('productsBody');
   tbody.innerHTML = '';
 
+  showReadChecks([data]);
   // 地金・ルースだけの行を上の商品にまとめ、型番を確認する
   await prepareItems(data);
 
@@ -1930,6 +2125,7 @@ async function renderResult(data) {
         repairNote: item.repair_note || '',
         note: item.note || '',
         mergedFrom: item._mergedFrom || [],
+        sourceText: (item._source || []).join(' ／ '),
         metalConflict: hasMetalConflict(sakaModel)
       });
     }
@@ -2101,6 +2297,7 @@ function buildRowTr(row, i) {
     <td>${repairBadge}</td>
     <td style="white-space:nowrap">
       <input class="td-input" value="${row.sakaModel}" oninput="updateRow(${i},'sakaModel',this.value)" style="width:100%">
+      ${row.sourceText ? `<div style="font-size:9px;color:var(--text-sub);white-space:normal;line-height:1.4;margin-top:2px" title="納品書に書かれていた文字">📄 ${escHtml(row.sourceText)}</div>` : ''}
       ${correctionBadge}
       ${(row.mergedFrom && row.mergedFrom.length) ? `<span style="display:inline-block;padding:1px 6px;border-radius:2px;font-size:9px;background:#eef6ee;color:#2d6a4f;font-weight:500;margin-left:2px;cursor:help" title="下の行をこの商品にまとめました：${escHtml(row.mergedFrom.join(' / '))}">🔗まとめた</span>` : ''}
       ${row.metalConflict ? '<span style="display:inline-block;padding:1px 5px;border-radius:2px;font-size:9px;background:#fff3cd;color:#856404;font-weight:500;margin-left:2px" title="金種が重複しています">⚠金種重複</span>' : ''}
@@ -2762,6 +2959,7 @@ function confirmAndSave() {
 async function renderMultiResult(invoices) {
   // 日付順でソート
   invoices.sort((a, b) => (a.date||'').localeCompare(b.date||''));
+  showReadChecks(invoices);
 
   // 全商品行を展開（伝票情報付き）
   const allRows = [];
@@ -3018,6 +3216,7 @@ function viewHistoryDetail(id) {
   if (sectionHeader) sectionHeader.innerHTML = '読み取り結果 — 確認・編集 <span style="font-size:11px;background:#2d6a4f;color:#fff;padding:2px 8px;border-radius:2px;margin-left:8px">編集中</span>';
 
   updateTotals();
+  showReadChecks([]);
   document.getElementById('resultSection').style.display = 'block';
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -3141,6 +3340,7 @@ function clearResult() {
   currentData = null;
   _undoStack = [];
   const ub=document.getElementById('undoBtn'); if(ub) ub.style.display='none';
+  showReadChecks([]);
   document.getElementById('resultSection').style.display = 'none';
   document.getElementById('fileInput').value = '';
   document.getElementById('statusBar').style.display = 'none';
