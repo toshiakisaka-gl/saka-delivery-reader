@@ -1708,6 +1708,7 @@ async function callClaudeAPI(base64, isPDF, mimeType) {
 - K10YG K18YG PT900 SV925 は地金種別であり型番ではない → metal_typeフィールドへ
 - グラム数・括弧・重量は型番ではない
 - 型番に金種・サイズ・グラムを絶対に含めない
+- 型番は印字されている通りに最後まで転記する。途中で切ったり短くしたりしない（例：「011-R3Wing」を「011-R」にしない）
 - チェーン・パーツ類（ベネチアンチェーン・あずきチェーン・ポスト等）はSAKAの型番がないので商品名をそのままmodelに入れる
 - サイズ直し・修理・メッキ・仕上げ等の作業系も商品名をそのままmodelに入れ、repair_type="repair"を付ける`;
 
@@ -2419,9 +2420,20 @@ async function resolveAlias(rawModel, ctx) {
   const masterMatch = modelMaster.find(m => m.code === normalized);
   if (masterMatch) return { model: masterMatch.code, isCorrection: false };
 
-  // 型番マスタで部分一致
-  const partialMatch = modelMaster.find(m => normalized.startsWith(m.code) || m.code.startsWith(normalized));
-  if (partialMatch) return { model: partialMatch.code, isCorrection: false };
+  // 型番マスタで「金種の末尾だけ違う」ものを探す（例：011-RCDA → 011-RCDA-18）
+  // ※ 前は「〜で始まる」だけで同じとみなしていたため、011-R3Wing が 011-R になっていた（2026/11/16 修正）
+  const METAL_TAIL_RE = /-(?:10|18|PT|SV-C|SV)$/i;
+  const baseCode = c => String(c || '').trim().replace(METAL_TAIL_RE, '');
+  const nb = baseCode(normalized);
+  const baseMatch = modelMaster.find(m => baseCode(m.code) === nb);
+  if (baseMatch) return { model: baseCode(baseMatch.code), isCorrection: false };
+
+  // 型番のうしろにサイズや空白が付いているだけのもの（例：「011-RCDA #14」）。一番長く一致する型番を使う
+  const prefixMatch = modelMaster
+    .map(m => baseCode(m.code))
+    .filter(b => b && normalized.startsWith(b) && /^[\s#(（]/.test(normalized.slice(b.length)))
+    .sort((a, b) => b.length - a.length)[0];
+  if (prefixMatch) return { model: prefixMatch, isCorrection: false };
 
   // 修理・加工系キーワードならそのまま返す
   const repairKw = ['サイズ直し','修理','メッキ','仕上げ','クリアのみ','返却','リフォーム','磨き','洗浄','新品'];
